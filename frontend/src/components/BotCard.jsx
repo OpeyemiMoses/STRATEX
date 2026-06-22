@@ -1,0 +1,106 @@
+import { useNavigate } from 'react-router-dom';
+import Badge from './Badge.jsx';
+import MiniChart from './MiniChart.jsx';
+import Toggle from './Toggle.jsx';
+import AssetIcon from './AssetIcon.jsx';
+
+const getAssetIcon = (asset) => ASSET_ICONS[asset] || null;
+
+export default function BotCard({ bot, onToggle }) {
+  const navigate = useNavigate();
+
+  return (
+    <div
+      onClick={() => navigate(`/bot/${bot.id}`)}
+      style={{
+        background: 'var(--bg2)',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: 16,
+        cursor: 'pointer',
+        transition: 'border-color 0.2s, box-shadow 0.2s',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+      onMouseEnter={e => {
+        e.currentTarget.style.borderColor = 'var(--blue)';
+        e.currentTarget.style.boxShadow = '0 0 20px var(--blue-glow)';
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.borderColor = 'var(--border)';
+        e.currentTarget.style.boxShadow = 'none';
+      }}
+    >
+      {/* Top row */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+       <div style={{
+            width: 36,
+            height: 36,
+            borderRadius: 6,
+            background: `${bot.color}22`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 16,
+            flexShrink: 0,
+            overflow: 'hidden',
+          }}>
+            <AssetIcon asset={bot.asset} size={22} fallback={bot.emoji || '⚡'} fallbackColor={bot.color} />
+          </div>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>{bot.name}</div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+              {bot.asset} · {bot.timeframe}
+            </div>
+          </div>
+        </div>
+        <Toggle
+          checked={bot.status === 'active'}
+          onChange={e => { e.stopPropagation(); onToggle(bot.id); }}
+        />
+      </div>
+
+      {/* Mini chart */}
+      <MiniChart positive={bot.pnl >= 0} height={40} />
+
+      {/* Metrics */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginBottom: 2 }}>P&L</div>
+          <div style={{
+            fontFamily: 'var(--mono)',
+            fontSize: 14,
+            fontWeight: 600,
+            color: (bot.position === 'open' ? bot.unrealizedPnl : bot.pnl) >= 0 ? 'var(--green)' : 'var(--red)',
+          }}>
+            {bot.position === 'open'
+              ? `${bot.unrealizedPnl >= 0 ? '+' : ''}$${bot.unrealizedPnl?.toFixed(2) ?? '0.00'} (live)`
+              : `${bot.pnl >= 0 ? '+' : ''}$${bot.pnl?.toFixed(2) ?? '0.00'}`}
+          </div>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginBottom: 2 }}>Win Rate</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)' }}>
+            {bot.winRate?.toFixed(1) ?? '0.0'}%
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginBottom: 2 }}>Trades</div>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text)' }}>
+            {bot.trades ?? 0}
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Badge status={bot.status} />
+        <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+          {new Date(bot.createdAt).toLocaleDateString()}
+        </span>
+      </div>
+    </div>
+  );
+}
