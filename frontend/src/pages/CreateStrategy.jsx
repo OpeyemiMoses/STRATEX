@@ -4,18 +4,6 @@ import { useAccount } from 'wagmi';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
-const FIELD_LABELS = {
-  entryPrice: 'Entry Price',
-  entryCondition: 'Entry Condition',
-  takeProfitPrice: 'Take Profit Price',
-  takeProfitPercent: 'Take Profit %',
-  stopLossPrice: 'Stop Loss Price',
-  stopLossPercent: 'Stop Loss %',
-  positionSizePercent: 'Position Size %',
-  positionSizeUSDT: 'Position Size (USDT)',
-  timeframe: 'Timeframe',
-};
-
 const STEPS = {
   INPUT: 'input',
   CLARIFYING: 'clarifying',
@@ -28,7 +16,6 @@ export default function CreateStrategy() {
   const navigate = useNavigate();
   const { address } = useAccount();
 
-  // Core state
   const [step, setStep] = useState(STEPS.INPUT);
   const [strategyText, setStrategyText] = useState('');
   const [parsed, setParsed] = useState(null);
@@ -37,21 +24,18 @@ export default function CreateStrategy() {
   const [clarifyQuestion, setClarifyQuestion] = useState(null);
   const [clarifyInput, setClarifyInput] = useState('');
   const [analysis, setAnalysis] = useState(null);
-  const [chosenStrategy, setChosenStrategy] = useState(null); // 'user' | 'safer'
-  const [editingStrategy, setEditingStrategy] = useState(null); // null | 'user' | 'safer'
+  const [chosenStrategy, setChosenStrategy] = useState(null);
+  const [editingStrategy, setEditingStrategy] = useState(null);
   const [editValues, setEditValues] = useState({});
   const [botName, setBotName] = useState('');
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-
-  // Chat history for display
   const [chatHistory, setChatHistory] = useState([]);
 
   const addChat = (role, content, type = 'text') => {
     setChatHistory(prev => [...prev, { role, content, type, id: Date.now() + Math.random() }]);
   };
 
-  // ── Step 1: Parse the initial strategy text ──
   const handleParse = async () => {
     if (!strategyText.trim()) return;
     setError('');
@@ -66,15 +50,10 @@ export default function CreateStrategy() {
       });
       const data = await res.json();
 
-      if (data.error) {
-        setError(data.error);
-        setStep(STEPS.INPUT);
-        return;
-      }
+      if (data.error) { setError(data.error); setStep(STEPS.INPUT); return; }
 
       const p = data.parsed;
       setParsed(p);
-
       addChat('ai', `Got it. ${p.summary}`, 'summary');
 
       if (p.missing && p.missing.length > 0) {
@@ -90,7 +69,6 @@ export default function CreateStrategy() {
     }
   };
 
-  // ── Step 2: Get clarifying question for next missing field ──
   const fetchClarifyQuestion = async (field, context) => {
     try {
       const res = await fetch(`${API}/api/strategy/clarify`, {
@@ -107,7 +85,6 @@ export default function CreateStrategy() {
     }
   };
 
-  // ── Step 3: Handle clarification answer ──
   const handleClarifyAnswer = async (answer) => {
     addChat('ai', clarifyQuestion.question, 'question');
     addChat('user', answer);
@@ -115,8 +92,6 @@ export default function CreateStrategy() {
     const updatedParsed = { ...parsed };
     const field = clarifyQuestion.field;
 
-    // Reference price: use live price if entry is a market order (entryPrice is 0/null),
-    // otherwise use the actual stored entry price
     const referencePrice = parsed.entryPrice && parsed.entryPrice > 0
       ? parsed.entryPrice
       : (parsed.livePrice || null);
@@ -125,21 +100,14 @@ export default function CreateStrategy() {
     const num = parseFloat(answer.replace(/[^0-9.]/g, ''));
 
     if (field === 'takeProfitPrice' || field === 'stopLossPrice') {
-      // Detect "% above/below entry" style answers
       const isPercentOffset = /%/.test(answer) && /(above|below)\s*entry/.test(lower);
-
       if (isPercentOffset && referencePrice) {
-        const direction = field === 'takeProfitPrice' ? 1 : -1; // TP goes up, SL goes down by default for longs
         const isBelow = /below/.test(lower);
         const sign = isBelow ? -1 : 1;
-        const targetPrice = referencePrice * (1 + (sign * num) / 100);
-        updatedParsed[field] = parseFloat(targetPrice.toFixed(4));
+        updatedParsed[field] = parseFloat((referencePrice * (1 + (sign * num) / 100)).toFixed(4));
       } else if (/specific price|set a/.test(lower)) {
-        // User chose "Set a specific price" option but didn't give a number yet —
-        // ask again as free text (handled by leaving field unset, will re-prompt)
         updatedParsed[field] = null;
       } else if (!isNaN(num)) {
-        // Treat as a literal price if it's a plain number with no % sign
         updatedParsed[field] = /%/.test(answer) && referencePrice
           ? parseFloat((referencePrice * (1 + num / 100)).toFixed(4))
           : num;
@@ -151,20 +119,12 @@ export default function CreateStrategy() {
     } else if (field === 'positionSizeUSDT') {
       updatedParsed[field] = isNaN(num) ? answer : num;
     } else if (field === 'leverage') {
-      // "No leverage" -> 1x. "5x" / "10x" / a bare number -> that multiplier.
-      if (/no leverage/.test(lower)) {
-        updatedParsed[field] = 1;
-      } else {
-        updatedParsed[field] = isNaN(num) ? 1 : num;
-      }
+      updatedParsed[field] = /no leverage/.test(lower) ? 1 : (isNaN(num) ? 1 : num);
     } else if (field === 'timeframe') {
       const tfMap = {
-        '1 minute': '1m', '1m': '1m',
-        '5 minutes': '5m', '5m': '5m',
-        '15 minutes': '15m', '15m': '15m',
-        '1 hour': '1h', '1h': '1h',
-        '4 hours': '4h', '4h': '4h',
-        '1 day': '1d', '1d': '1d',
+        '1 minute': '1m', '1m': '1m', '5 minutes': '5m', '5m': '5m',
+        '15 minutes': '15m', '15m': '15m', '1 hour': '1h', '1h': '1h',
+        '4 hours': '4h', '4h': '4h', '1 day': '1d', '1d': '1d',
       };
       updatedParsed[field] = tfMap[lower] || answer;
     } else {
@@ -185,7 +145,6 @@ export default function CreateStrategy() {
     }
   };
 
-  // ── Step 4: Run full risk analysis ──
   const runAnalysis = async (p) => {
     setStep(STEPS.ANALYSING);
     try {
@@ -196,8 +155,11 @@ export default function CreateStrategy() {
       });
       const data = await res.json();
       setAnalysis(data.analysis);
-      setChosenStrategy('safer'); // default to safer
+      setChosenStrategy('safer');
+      // FIX: initialise editValues to safer strategy but DON'T set editingStrategy
+      // so the user starts in read mode, not edit mode
       setEditValues(data.analysis.saferStrategy);
+      setEditingStrategy(null);
       setStep(STEPS.REVIEW);
     } catch (err) {
       setError('Failed to analyse strategy. Please try again.');
@@ -205,15 +167,13 @@ export default function CreateStrategy() {
     }
   };
 
-  // ── Step 5: Create the bot ──
   const handleCreateBot = async () => {
-    if (!botName.trim()) {
-      setError('Please give your bot a name.');
-      return;
-    }
+    if (!botName.trim()) { setError('Please give your bot a name.'); return; }
     setStep(STEPS.CREATING);
 
-    const strategy = editingStrategy
+    // FIX: if user was editing, use editValues; otherwise use the chosen strategy as-is
+    // editValues is only used when editingStrategy matches chosenStrategy
+    const strategy = editingStrategy === chosenStrategy
       ? editValues
       : chosenStrategy === 'user'
       ? analysis.userStrategy
@@ -231,10 +191,6 @@ export default function CreateStrategy() {
       stopLoss: strategy.stopLossPrice,
       positionSize: strategy.positionSizePercent,
       walletAddress: address,
-      // NEW (#3): leverage flows from whichever strategy version was chosen
-      // (user's or AI's safer version) — falls back to the originally parsed
-      // value, then 1x, so a leverage value never silently disappears between
-      // parse → analyse → create even if the chosen strategy object omits it.
       leverage: strategy.leverage ?? parsed.leverage ?? 1,
     };
 
@@ -252,11 +208,7 @@ export default function CreateStrategy() {
     }
   };
 
-  const riskColor = {
-    low: 'var(--green)',
-    medium: '#F59E0B',
-    high: 'var(--red)',
-  };
+  const riskColor = { low: 'var(--green)', medium: '#F59E0B', high: 'var(--red)' };
 
   return (
     <div style={{ padding: 20, paddingBottom: 80, maxWidth: 860, margin: '0 auto' }}>
@@ -281,31 +233,27 @@ export default function CreateStrategy() {
         </button>
       </div>
 
-      {/* ── INPUT STEP ── */}
+      {/* INPUT */}
       {step === STEPS.INPUT && (
         <div>
           <div style={{
             background: 'var(--bg2)', border: '1px solid var(--border)',
             borderRadius: 10, overflow: 'hidden', marginBottom: 16,
           }}>
-            {/* Terminal header */}
             <div style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '10px 14px', borderBottom: '1px solid var(--border)',
               background: 'var(--bg3)',
             }}>
-              {['#FF5F57','#FFBD2E','#28C840'].map(c => (
+              {['#FF5F57', '#FFBD2E', '#28C840'].map(c => (
                 <div key={c} style={{ width: 10, height: 10, borderRadius: '50%', background: c }} />
               ))}
               <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginLeft: 6 }}>
                 stratex://new-strategy
               </span>
             </div>
-
             <div style={{ padding: 16 }}>
-              <div style={{
-                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 10,
-              }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginBottom: 10 }}>
                 // Describe your trade in plain English. The AI will handle the rest.
               </div>
               <textarea
@@ -325,7 +273,6 @@ export default function CreateStrategy() {
             </div>
           </div>
 
-          {/* Example chips */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
             {[
               'Buy BTC at $60k with 10% of my portfolio',
@@ -353,7 +300,8 @@ export default function CreateStrategy() {
               background: strategyText.trim() ? 'var(--blue)' : 'var(--bg3)',
               color: strategyText.trim() ? '#fff' : 'var(--text-dim)',
               border: 'none', borderRadius: 6, padding: '10px 24px',
-              fontSize: 13, fontWeight: 600, cursor: strategyText.trim() ? 'pointer' : 'not-allowed',
+              fontSize: 13, fontWeight: 600,
+              cursor: strategyText.trim() ? 'pointer' : 'not-allowed',
               fontFamily: 'var(--sans)',
             }}
           >
@@ -362,52 +310,38 @@ export default function CreateStrategy() {
         </div>
       )}
 
-      {/* ── CLARIFYING STEP ── */}
+      {/* CLARIFYING */}
       {step === STEPS.CLARIFYING && (
         <div>
-          {/* Chat history */}
           <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
             {chatHistory.map(msg => (
-              <div key={msg.id} style={{
-                display: 'flex',
-                justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-              }}>
+              <div key={msg.id} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
                 <div style={{
                   maxWidth: '75%',
                   background: msg.role === 'user' ? 'var(--blue)' : 'var(--bg2)',
                   border: msg.role === 'user' ? 'none' : '1px solid var(--border)',
                   borderRadius: msg.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-                  padding: '10px 14px',
-                  fontFamily: 'var(--mono)',
-                  fontSize: 12,
-                  color: msg.role === 'user' ? '#fff' : 'var(--text)',
-                  lineHeight: 1.6,
+                  padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: 12,
+                  color: msg.role === 'user' ? '#fff' : 'var(--text)', lineHeight: 1.6,
                 }}>
                   {msg.content}
                 </div>
               </div>
             ))}
 
-            {/* Current question */}
             {clarifyQuestion && (
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                 <div style={{
-                  maxWidth: '75%',
-                  background: 'var(--bg2)',
+                  maxWidth: '75%', background: 'var(--bg2)',
                   border: '1px solid var(--blue)',
                   borderRadius: '12px 12px 12px 2px',
-                  padding: '12px 14px',
-                  fontFamily: 'var(--mono)',
-                  fontSize: 12,
-                  color: 'var(--text)',
-                  lineHeight: 1.6,
+                  padding: '12px 14px', fontFamily: 'var(--mono)', fontSize: 12,
+                  color: 'var(--text)', lineHeight: 1.6,
                 }}>
                   <div style={{ color: 'var(--blue)', fontSize: 10, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                     STRATEX AI
                   </div>
                   {clarifyQuestion.question}
-
-                  {/* Quick pick options */}
                   {clarifyQuestion.options?.length > 0 && (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
                       {clarifyQuestion.options.map(opt => (
@@ -430,7 +364,6 @@ export default function CreateStrategy() {
             )}
           </div>
 
-          {/* Free text input */}
           <div style={{ display: 'flex', gap: 8 }}>
             <input
               value={clarifyInput}
@@ -454,14 +387,13 @@ export default function CreateStrategy() {
               →
             </button>
           </div>
-
           <div style={{ marginTop: 10, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
             {missingFields.length} question{missingFields.length !== 1 ? 's' : ''} remaining
           </div>
         </div>
       )}
 
-      {/* ── ANALYSING STEP ── */}
+      {/* ANALYSING */}
       {step === STEPS.ANALYSING && (
         <div style={{ padding: '60px 0', textAlign: 'center' }}>
           <div style={{
@@ -472,27 +404,20 @@ export default function CreateStrategy() {
           <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text-dim)' }}>
             // Analysing your strategy...
           </div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 8, opacity: 0.6 }}>
-            Checking risk levels, market conditions, and building a safer alternative
-          </div>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       )}
 
-      {/* ── REVIEW STEP ── */}
+      {/* REVIEW */}
       {step === STEPS.REVIEW && analysis && (
         <div>
-          {/* Risk badge */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20,
             padding: '12px 16px', background: 'var(--bg2)',
             border: `1px solid ${riskColor[analysis.riskLevel] || 'var(--border)'}`,
             borderRadius: 8,
           }}>
-            <div style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: riskColor[analysis.riskLevel],
-            }} />
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: riskColor[analysis.riskLevel] }} />
             <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: riskColor[analysis.riskLevel], textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               {analysis.riskLevel} Risk
             </span>
@@ -501,30 +426,36 @@ export default function CreateStrategy() {
             </span>
           </div>
 
-          {/* Strategy comparison */}
           <div className="strategy-comparison-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
             {['user', 'safer'].map(type => {
               const s = type === 'user' ? analysis.userStrategy : analysis.saferStrategy;
               const isChosen = chosenStrategy === type;
               const isEditing = editingStrategy === type;
 
+              // FIX: clicking the card only switches which is chosen — it does NOT
+              // reset editValues if this card is already being edited
+              const handleCardClick = () => {
+                setChosenStrategy(type);
+                // Only reset editValues if we're switching TO this card and weren't already editing it
+                if (editingStrategy !== type) {
+                  setEditingStrategy(null);
+                  setEditValues(s);
+                }
+              };
+
               return (
                 <div
                   key={type}
-                  onClick={() => { setChosenStrategy(type); setEditingStrategy(null); setEditValues(s); }}
+                  onClick={handleCardClick}
                   style={{
                     background: 'var(--bg2)',
                     border: `1px solid ${isChosen ? 'var(--blue)' : 'var(--border)'}`,
                     borderRadius: 10, padding: 16, cursor: 'pointer',
                     boxShadow: isChosen ? '0 0 20px rgba(27,111,248,0.12)' : 'none',
-                    transition: 'all 0.2s',
-                    position: 'relative',
+                    transition: 'all 0.2s', position: 'relative',
                   }}
                 >
-                  {/* Label */}
-                  <div style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14,
-                  }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                     <div style={{
                       fontFamily: 'var(--mono)', fontSize: 10, textTransform: 'uppercase',
                       letterSpacing: '0.08em',
@@ -542,11 +473,6 @@ export default function CreateStrategy() {
                     )}
                   </div>
 
-                  {/* Fields — editable if editing.
-                      NEW (#3): Leverage row added — only rendered when the
-                      strategy actually has leverage > 1x, so unleveraged
-                      strategies (the common case) keep the original compact
-                      card layout with no empty/irrelevant row. */}
                   {[
                     { l: 'Entry', k: 'entryPrice', prefix: '$' },
                     { l: 'Take Profit', k: 'takeProfitPrice', prefix: '$' },
@@ -574,10 +500,10 @@ export default function CreateStrategy() {
                           }}
                         />
                       ) : (
-                        <span style={{
-                          fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500,
-                        }}>
-                          {field.raw ? s[field.k] : `${field.prefix || ''}${s[field.k]}${field.suffix || ''}`}
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500 }}>
+                          {field.raw
+                            ? (isEditing ? (editValues[field.k] ?? s[field.k]) : s[field.k])
+                            : `${field.prefix || ''}${isEditing ? (editValues[field.k] ?? s[field.k]) : s[field.k]}${field.suffix || ''}`}
                         </span>
                       )}
                     </div>
@@ -587,7 +513,6 @@ export default function CreateStrategy() {
                     {s.verdict}
                   </div>
 
-                  {/* Edit / Done toggle */}
                   <button
                     onClick={e => {
                       e.stopPropagation();
@@ -596,15 +521,15 @@ export default function CreateStrategy() {
                         setEditingStrategy(null);
                       } else {
                         setEditingStrategy(type);
-                        setEditValues(s);
+                        // Only seed editValues from s if not already editing this card
+                        if (editingStrategy !== type) setEditValues(s);
                       }
                     }}
                     style={{
                       marginTop: 12, background: 'none',
                       border: '1px solid var(--border)', borderRadius: 5,
                       color: 'var(--text-dim)', padding: '4px 10px',
-                      fontSize: 10, cursor: 'pointer', fontFamily: 'var(--mono)',
-                      width: '100%',
+                      fontSize: 10, cursor: 'pointer', fontFamily: 'var(--mono)', width: '100%',
                     }}
                   >
                     {isEditing ? '✓ Done Editing' : '✎ Edit Values'}
@@ -614,7 +539,6 @@ export default function CreateStrategy() {
             })}
           </div>
 
-          {/* AI recommendation */}
           <div style={{
             background: '#060A10', border: '1px solid var(--border)',
             borderRadius: 8, padding: 14, marginBottom: 20,
@@ -626,7 +550,6 @@ export default function CreateStrategy() {
             {analysis.recommendation}
           </div>
 
-          {/* Safer changes list */}
           {analysis.saferStrategy?.changes?.length > 0 && (
             <div style={{
               background: 'rgba(0,214,143,0.04)', border: '1px solid rgba(0,214,143,0.15)',
@@ -643,11 +566,7 @@ export default function CreateStrategy() {
             </div>
           )}
 
-          {/* Bot name + create */}
-          <div style={{
-            background: 'var(--bg2)', border: '1px solid var(--border)',
-            borderRadius: 8, padding: 16,
-          }}>
+          <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
               Name your bot
             </div>
@@ -679,13 +598,13 @@ export default function CreateStrategy() {
             </button>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 8, textAlign: 'center' }}>
               Using {chosenStrategy === 'user' ? 'your' : "AI's safer"} strategy
-              {editingStrategy ? ' (with your edits)' : ''}
+              {editingStrategy === chosenStrategy ? ' (with your edits)' : ''}
             </div>
           </div>
         </div>
       )}
 
-      {/* ── CREATING STEP ── */}
+      {/* CREATING */}
       {step === STEPS.CREATING && (
         <div style={{ padding: '60px 0', textAlign: 'center' }}>
           <div style={{
@@ -700,7 +619,6 @@ export default function CreateStrategy() {
         </div>
       )}
 
-      {/* ── ADVANCED MODE ── */}
       {showAdvanced && (
         <div style={{
           marginTop: 32, background: 'var(--bg2)', border: '1px solid var(--border)',
@@ -723,9 +641,7 @@ export default function CreateStrategy() {
 
       <style>{`
         @media (max-width: 768px) {
-          .strategy-comparison-grid {
-            grid-template-columns: 1fr !important;
-          }
+          .strategy-comparison-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
     </div>

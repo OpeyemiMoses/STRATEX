@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
+import { useAccount } from 'wagmi';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const POLL_INTERVAL_MS = 5000;
@@ -27,27 +29,37 @@ function timeAgo(isoString) {
 }
 
 export default function DecisionConsole() {
+  const location = useLocation();
+  const { address, isConnected } = useAccount();
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [entries, setEntries] = useState([]);
   const [unseenCount, setUnseenCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const lastSeenTimestampRef = useRef(null);
+  const panelRef = useRef(null);
+  const buttonRef = useRef(null);
+
+  // Hide on landing page or when not connected
+  const isLanding = location.pathname === '/';
+  if (isLanding || !isConnected) return null;
 
   const fetchEntries = async () => {
+    if (!address) return;
     setLoading(true);
     try {
-      const tab = TABS.find((t) => t.key === activeTab);
+      const tab = TABS.find(t => t.key === activeTab);
       const typeParam = tab?.types ? `&type=${tab.types[0]}` : '';
-      const res = await fetch(`${API}/api/decisions/recent?limit=100${typeParam}`);
+      // Wallet-scoped: only fetch entries for the connected wallet
+      const res = await fetch(`${API}/api/decisions/recent?limit=100&wallet=${address}${typeParam}`);
       const data = await res.json();
       setEntries(data);
 
       if (!isOpen && data.length > 0) {
         const newest = data[0].timestamp;
         if (lastSeenTimestampRef.current && newest > lastSeenTimestampRef.current) {
-          const newCount = data.filter((e) => e.timestamp > lastSeenTimestampRef.current).length;
-          setUnseenCount((prev) => prev + newCount);
+          const newCount = data.filter(e => e.timestamp > lastSeenTimestampRef.current).length;
+          setUnseenCount(prev => prev + newCount);
         } else if (!lastSeenTimestampRef.current) {
           lastSeenTimestampRef.current = newest;
         }
@@ -63,7 +75,26 @@ export default function DecisionConsole() {
     fetchEntries();
     const interval = setInterval(fetchEntries, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [activeTab]);
+  }, [activeTab, address]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleOutsideClick = (e) => {
+      if (
+        panelRef.current && !panelRef.current.contains(e.target) &&
+        buttonRef.current && !buttonRef.current.contains(e.target)
+      ) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+    };
+  }, [isOpen]);
 
   const handleOpen = () => {
     setIsOpen(true);
@@ -71,10 +102,22 @@ export default function DecisionConsole() {
     if (entries.length > 0) lastSeenTimestampRef.current = entries[0].timestamp;
   };
 
+  const handleClear = async () => {
+    try {
+      await fetch(`${API}/api/decisions/clear?wallet=${address}`, { method: 'DELETE' });
+      setEntries([]);
+      setUnseenCount(0);
+      lastSeenTimestampRef.current = null;
+    } catch (err) {
+      console.error('Failed to clear decision log:', err.message);
+    }
+  };
+
   return (
     <>
       {/* Floating toggle button */}
       <button
+        ref={buttonRef}
         onClick={() => (isOpen ? setIsOpen(false) : handleOpen())}
         style={{
           position: 'fixed',
@@ -93,30 +136,21 @@ export default function DecisionConsole() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          position: 'fixed',
         }}
         className="decision-console-toggle"
         aria-label="Toggle decision console"
       >
         {isOpen ? '✕' : '⚡'}
         {!isOpen && unseenCount > 0 && (
-          <span
-            style={{
-              position: 'absolute',
-              top: '-4px',
-              right: '-4px',
-              background: '#E84D4D',
-              color: '#fff',
-              borderRadius: '999px',
-              fontSize: '11px',
-              fontFamily: 'JetBrains Mono, monospace',
-              minWidth: '18px',
-              height: '18px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '0 4px',
-            }}
-          >
+          <span style={{
+            position: 'absolute', top: '-4px', right: '-4px',
+            background: '#E84D4D', color: '#fff', borderRadius: '999px',
+            fontSize: '11px', fontFamily: 'JetBrains Mono, monospace',
+            minWidth: '18px', height: '18px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '0 4px',
+          }}>
             {unseenCount > 99 ? '99+' : unseenCount}
           </span>
         )}
@@ -125,6 +159,7 @@ export default function DecisionConsole() {
       {/* Expanded panel */}
       {isOpen && (
         <div
+          ref={panelRef}
           className="decision-console-panel"
           style={{
             position: 'fixed',
@@ -145,20 +180,37 @@ export default function DecisionConsole() {
             fontFamily: 'JetBrains Mono, monospace',
           }}
         >
-          {/* Header / tabs */}
+          {/* Header */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '10px 12px', borderBottom: '1px solid #1f2937', flexShrink: 0,
+          }}>
+            <span style={{ fontSize: '11px', color: '#8b949e' }}>
+              Decision Console
+            </span>
+            <button
+              onClick={handleClear}
+              style={{
+                background: 'transparent', border: '1px solid #1f2937',
+                borderRadius: 4, color: '#8b949e', fontSize: '10px',
+                padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit',
+              }}
+            >
+              Clear
+            </button>
+          </div>
+
+          {/* Tabs */}
           <div style={{ display: 'flex', borderBottom: '1px solid #1f2937', flexShrink: 0 }}>
-            {TABS.map((tab) => (
+            {TABS.map(tab => (
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
                 style={{
-                  flex: 1,
-                  padding: '10px 6px',
+                  flex: 1, padding: '10px 6px',
                   background: activeTab === tab.key ? '#1B6FF8' : 'transparent',
                   color: activeTab === tab.key ? '#fff' : '#8b949e',
-                  border: 'none',
-                  fontSize: '11px',
-                  cursor: 'pointer',
+                  border: 'none', fontSize: '11px', cursor: 'pointer',
                   fontFamily: 'inherit',
                 }}
               >
@@ -179,14 +231,12 @@ export default function DecisionConsole() {
                 No activity yet.
               </div>
             )}
-            {entries.map((entry) => (
+            {entries.map(entry => (
               <div
                 key={entry.id}
                 style={{
-                  padding: '8px 10px',
-                  marginBottom: '6px',
-                  background: '#161b22',
-                  borderRadius: '6px',
+                  padding: '8px 10px', marginBottom: '6px',
+                  background: '#161b22', borderRadius: '6px',
                   borderLeft: `3px solid ${SEVERITY_COLOR[entry.severity] || '#1B6FF8'}`,
                 }}
               >
@@ -208,8 +258,6 @@ export default function DecisionConsole() {
         </div>
       )}
 
-      {/* Lift above the bottom tab bar on mobile — adjust --tab-bar-height if
-          your Navbar's actual height differs from this estimate. */}
       <style>{`
         @media (max-width: 768px) {
           .decision-console-toggle {
@@ -217,6 +265,7 @@ export default function DecisionConsole() {
           }
           .decision-console-panel {
             bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 76px) !important;
+            height: 360px !important;
           }
         }
       `}</style>

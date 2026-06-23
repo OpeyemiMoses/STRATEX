@@ -8,38 +8,40 @@ export default function WalletBalance({ bots = [] }) {
   const [wallet, setWallet] = useState(null);
   const [loading, setLoading] = useState(true);
 
-useEffect(() => {
-  if (!isConnected) return;
-  const fetchWallet = async () => {
-    try {
-      const res = await fetch(`${API}/api/bots/wallet/${address}`);
-      const data = await res.json();
-      setWallet(data);
-    } catch (err) {
-      console.error('Wallet fetch error:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-  fetchWallet(); // fetch immediately when bots change too
-  const interval = setInterval(fetchWallet, 5000); // was 15000
-  return () => clearInterval(interval);
-}, [address, isConnected, bots]); // 👈 add bots as dependency
+  useEffect(() => {
+    if (!isConnected) return;
+    const fetchWallet = async () => {
+      try {
+        const res = await fetch(`${API}/api/bots/wallet/${address}`);
+        const data = await res.json();
+        setWallet(data);
+      } catch (err) {
+        console.error('Wallet fetch error:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchWallet();
+    const interval = setInterval(fetchWallet, 5000);
+    return () => clearInterval(interval);
+  }, [address, isConnected, bots]);
 
   if (!isConnected) return null;
 
-const balance = wallet?.balance ?? 10000;
+  const balance = wallet?.balance ?? 10000;
   const startingBalance = 10000;
 
-  // Real total P&L = realized P&L (closed bots) + unrealized P&L (open bots)
-  const realizedPnl = bots
-    .filter(b => b.position === 'closed')
-    .reduce((acc, b) => acc + (b.pnl || 0), 0);
+  // Unrealized P&L from open positions (live, from bot data)
   const unrealizedPnl = bots
     .filter(b => b.position === 'open')
     .reduce((acc, b) => acc + (b.unrealizedPnl || 0), 0);
-  const pnl = realizedPnl + unrealizedPnl;
-  const pnlPercent = (pnl / startingBalance) * 100;
+
+  // Realized all-time P&L from server (persists across closes and restarts)
+  const realizedPnl = wallet?.totalPnl ?? 0;
+
+  // Total = all-time realized + current unrealized
+  const totalPnl = realizedPnl + unrealizedPnl;
+  const totalPnlPercent = (totalPnl / startingBalance) * 100;
 
   return (
     <div style={{
@@ -105,10 +107,30 @@ const balance = wallet?.balance ?? 10000;
           </div>
         </div>
 
-        {/* P&L */}
+        {/* Unrealized P&L — only shown if there are open positions */}
+        {unrealizedPnl !== 0 && (
+          <div style={{
+            background: unrealizedPnl >= 0 ? 'rgba(0,214,143,0.04)' : 'rgba(255,77,106,0.04)',
+            border: `1px solid ${unrealizedPnl >= 0 ? 'rgba(0,214,143,0.15)' : 'rgba(255,77,106,0.15)'}`,
+            borderRadius: 6,
+            padding: 12,
+          }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 8 }}>
+              UNREALIZED P&L
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 18, fontWeight: 700, color: unrealizedPnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
+              {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 4 }}>
+              open positions (live)
+            </div>
+          </div>
+        )}
+
+        {/* Total all-time P&L — persistent, never resets */}
         <div style={{
-          background: pnl >= 0 ? 'rgba(0,214,143,0.06)' : 'rgba(255,77,106,0.06)',
-          border: `1px solid ${pnl >= 0 ? 'rgba(0,214,143,0.2)' : 'rgba(255,77,106,0.2)'}`,
+          background: totalPnl >= 0 ? 'rgba(0,214,143,0.06)' : 'rgba(255,77,106,0.06)',
+          border: `1px solid ${totalPnl >= 0 ? 'rgba(0,214,143,0.2)' : 'rgba(255,77,106,0.2)'}`,
           borderRadius: 6,
           padding: 12,
           display: 'flex',
@@ -118,11 +140,11 @@ const balance = wallet?.balance ?? 10000;
           <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 4 }}>
             TOTAL P&L
           </div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
-            {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700, color: totalPnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            {totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}
           </div>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: pnl >= 0 ? 'var(--green)' : 'var(--red)', marginTop: 4 }}>
-            {pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}% all time
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: totalPnl >= 0 ? 'var(--green)' : 'var(--red)', marginTop: 4 }}>
+            {totalPnlPercent >= 0 ? '+' : ''}{totalPnlPercent.toFixed(2)}% all time
           </div>
         </div>
       </div>
