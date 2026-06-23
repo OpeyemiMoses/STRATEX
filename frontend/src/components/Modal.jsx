@@ -1,3 +1,11 @@
+/**
+ * Simple blurred-backdrop modal. Click outside or the close button to dismiss.
+ * Used by TradeHistory.jsx to show audit results and the downloadable PnL
+ * card without them competing for space with the floating DecisionConsole
+ * icon or the page's own layout (the original problem: inline expansion
+ * pushed table rows around and collided with the mobile tab bar / console
+ * button).
+ */
 export default function Modal({ isOpen, onClose, title, children }) {
   if (!isOpen) return null;
 
@@ -12,11 +20,9 @@ export default function Modal({ isOpen, onClose, title, children }) {
         WebkitBackdropFilter: 'blur(6px)',
         zIndex: 2000,
         display: 'flex',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         justifyContent: 'center',
-        overflowY: 'auto',
-        padding: '12px',
-        paddingTop: '64px',
+        padding: '20px',
       }}
     >
       <div
@@ -25,16 +31,13 @@ export default function Modal({ isOpen, onClose, title, children }) {
           background: 'var(--bg2, #0D1117)',
           border: '1px solid var(--border, #1f2937)',
           borderRadius: '12px',
-          maxWidth: '440px',
+          maxWidth: '1080px',
           width: '100%',
-          maxHeight: 'none',
-          display: 'flex',
-          flexDirection: 'column',
+          maxHeight: '90vh',
+          overflowY: 'auto',
           boxShadow: '0 12px 48px rgba(0,0,0,0.5)',
-          overflow: 'hidden',
         }}
       >
-        {/* Sticky header */}
         <div
           style={{
             display: 'flex',
@@ -42,7 +45,8 @@ export default function Modal({ isOpen, onClose, title, children }) {
             justifyContent: 'space-between',
             padding: '14px 16px',
             borderBottom: '1px solid var(--border, #1f2937)',
-            flexShrink: 0,
+            position: 'sticky',
+            top: 0,
             background: 'var(--bg2, #0D1117)',
           }}
         >
@@ -73,11 +77,7 @@ export default function Modal({ isOpen, onClose, title, children }) {
             ✕
           </button>
         </div>
-
-        {/* Scrollable body */}
-        <div style={{ padding: '16px', overflowY: 'auto', flex: 1, minHeight: 0 }}>
-          {children}
-        </div>
+        <div style={{ padding: '16px' }}>{children}</div>
       </div>
     </div>
   );

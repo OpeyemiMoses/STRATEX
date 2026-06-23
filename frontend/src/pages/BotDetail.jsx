@@ -6,6 +6,7 @@ import Badge from '../components/Badge.jsx';
 import Toggle from '../components/Toggle.jsx';
 import AssetIcon from '../components/AssetIcon.jsx';
 import PnLCard from '../components/PnLCard.jsx'; // NEW (#4)
+import Modal from '../components/Modal.jsx'; // NEW — modal wrapper for audit + PnL card
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -17,13 +18,14 @@ export default function BotDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [closing, setClosing] = useState(false);
 
-  // NEW (#12) — bot auditing state
+  // Bot auditing state (#12) — modal-based now, not inline
   const [auditing, setAuditing] = useState(false);
   const [auditResult, setAuditResult] = useState(null);
   const [auditError, setAuditError] = useState('');
+  const [showAuditModal, setShowAuditModal] = useState(false);
 
-  // NEW (#4) — toggle the downloadable PnL card panel
-  const [showPnlCard, setShowPnlCard] = useState(false);
+  // Downloadable PnL card (#4) — modal-based now, not inline
+  const [showPnlModal, setShowPnlModal] = useState(false);
 
   const bot = bots.find(b => b.id === id);
 
@@ -43,6 +45,7 @@ export default function BotDetail() {
 
   // NEW (#12)
   const handleAuditBot = async () => {
+    setShowAuditModal(true);
     setAuditing(true);
     setAuditError('');
     setAuditResult(null);
@@ -252,28 +255,25 @@ export default function BotDetail() {
             </div>
           </div>
 
-          {/* NEW (#4) — Downloadable PnL card */}
+          {/* NEW (#4) — Downloadable PnL card trigger. Renders in a Modal, not inline. */}
           {(bot.position === 'open' || bot.position === 'closed') && (
             <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
-              <div
-                onClick={() => setShowPnlCard(v => !v)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  cursor: 'pointer',
-                }}
-              >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                   Shareable PnL Card
                 </div>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--blue)' }}>
-                  {showPnlCard ? '▲ Hide' : '▼ Show'}
-                </span>
+                <button
+                  onClick={() => setShowPnlModal(true)}
+                  style={{
+                    background: 'transparent', color: 'var(--blue)',
+                    border: '1px solid var(--blue)', borderRadius: 5,
+                    padding: '4px 12px', fontSize: 11, cursor: 'pointer',
+                    fontFamily: 'var(--mono)',
+                  }}
+                >
+                  💾 View / Download
+                </button>
               </div>
-              {showPnlCard && (
-                <div style={{ marginTop: 14 }}>
-                  <PnLCard bot={bot} isClosed={bot.position === 'closed'} />
-                </div>
-              )}
             </div>
           )}
 
@@ -299,9 +299,9 @@ export default function BotDetail() {
             ))}
           </div>
 
-          {/* NEW (#12) — Bot Audit */}
+          {/* NEW (#12) — Bot Audit trigger. Results render in a Modal, not inline. */}
           <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 AI Audit
               </div>
@@ -318,50 +318,9 @@ export default function BotDetail() {
                 {auditing ? 'Auditing...' : '🔍 Audit This Bot'}
               </button>
             </div>
-
-            {auditError && (
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>{auditError}</div>
-            )}
-
-            {auditResult && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {auditResult.overallAssessment && (
-                  <div style={{
-                    fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-mid)',
-                    lineHeight: 1.6, padding: '8px 10px', background: 'var(--bg3)', borderRadius: 6,
-                  }}>
-                    {auditResult.overallAssessment}
-                  </div>
-                )}
-                {auditResult.flags?.length === 0 && (
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)' }}>
-                    ✓ No issues found
-                  </div>
-                )}
-                {auditResult.flags?.map((flag, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      padding: '8px 10px', background: 'var(--bg3)', borderRadius: 6,
-                      borderLeft: `3px solid ${severityColor[flag.severity] || 'var(--blue)'}`,
-                    }}
-                  >
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
-                      {flag.issue}
-                    </div>
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5 }}>
-                      {flag.reasoning}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {!auditResult && !auditError && !auditing && (
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
-                // Run an AI review of this bot's decisions and risk management
-              </div>
-            )}
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 8 }}>
+              // Run an AI review of this bot's decisions and risk management
+            </div>
           </div>
 
           {/* Trade Log */}
@@ -503,6 +462,62 @@ export default function BotDetail() {
           <div style={{ padding: 20, paddingBottom: 20 }}></div>
         </div>
       </div>
+
+      {/* Audit results modal (#12) */}
+      <Modal
+        isOpen={showAuditModal}
+        onClose={() => setShowAuditModal(false)}
+        title={`AI Audit · ${bot.name}`}
+      >
+        {auditing && (
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)', textAlign: 'center', padding: '20px 0' }}>
+            // Reviewing this bot's history...
+          </div>
+        )}
+        {auditError && (
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>{auditError}</div>
+        )}
+        {auditResult && !auditing && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {auditResult.overallAssessment && (
+              <div style={{
+                fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)',
+                lineHeight: 1.6, padding: '10px 12px', background: 'var(--bg3)', borderRadius: 6,
+              }}>
+                {auditResult.overallAssessment}
+              </div>
+            )}
+            {auditResult.flags?.length === 0 && (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--green)' }}>✓ No issues found</div>
+            )}
+            {auditResult.flags?.map((flag, i) => (
+              <div
+                key={i}
+                style={{
+                  padding: '10px 12px', background: 'var(--bg3)', borderRadius: 6,
+                  borderLeft: `3px solid ${severityColor[flag.severity] || 'var(--blue)'}`,
+                }}
+              >
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
+                  {flag.issue}
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+                  {flag.reasoning}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+
+      {/* PnL card modal (#4) */}
+      <Modal
+        isOpen={showPnlModal}
+        onClose={() => setShowPnlModal(false)}
+        title="Shareable PnL Card"
+      >
+        <PnLCard bot={bot} isClosed={bot.position === 'closed'} />
+      </Modal>
 
       <style>{`
         @media (max-width: 768px) {
