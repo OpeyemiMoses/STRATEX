@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useAccount } from 'wagmi';
 import AssetIcon from '../components/AssetIcon.jsx';
+import PnLCard from '../components/PnLCard.jsx';
+import Modal from '../components/Modal.jsx'; // NEW
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -10,6 +12,20 @@ export default function TradeHistory() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
+
+  // Audit modal state
+  const [auditingId, setAuditingId] = useState(null);
+  const [auditResults, setAuditResults] = useState({}); // { [botId]: { flags, overallAssessment } | { error } }
+  const [auditModalEntry, setAuditModalEntry] = useState(null); // the history entry currently shown in the modal
+
+  // PnL card modal state
+  const [pnlModalEntry, setPnlModalEntry] = useState(null);
+
+  const severityColor = {
+    info: 'var(--blue)',
+    warning: '#F59E0B',
+    critical: 'var(--red)',
+  };
 
   useEffect(() => {
     if (!isConnected) return;
@@ -43,6 +59,31 @@ export default function TradeHistory() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
+  // Opens the audit modal immediately (with a loading state inside it) and
+  // kicks off the audit request — avoids a dead click with no feedback
+  // while waiting for Qwen to respond.
+  const handleAuditEntry = async (e, entry) => {
+    e.stopPropagation();
+    setAuditModalEntry(entry);
+    if (auditResults[entry.botId]) return; // already audited this session, just show cached result
+    setAuditingId(entry.botId);
+    try {
+      const res = await fetch(`${API}/api/bots/${entry.botId}/audit`, { method: 'POST' });
+      if (!res.ok) throw new Error('Audit failed');
+      const data = await res.json();
+      setAuditResults(prev => ({ ...prev, [entry.botId]: data }));
+    } catch (err) {
+      setAuditResults(prev => ({ ...prev, [entry.botId]: { error: 'Audit failed. Please try again.' } }));
+    } finally {
+      setAuditingId(null);
+    }
+  };
+
+  const handleOpenPnlCard = (e, entry) => {
+    e.stopPropagation();
+    setPnlModalEntry(entry);
+  };
+
   const thStyle = {
     padding: '8px 12px',
     textAlign: 'left',
@@ -62,6 +103,61 @@ export default function TradeHistory() {
     fontFamily: 'var(--mono)',
     fontSize: 12,
     color: 'var(--text-mid)',
+  };
+
+  // Renders inside the audit Modal — works off auditModalEntry + auditResults/auditingId
+  const renderAuditModalContent = () => {
+    if (!auditModalEntry) return null;
+    const isLoading = auditingId === auditModalEntry.botId;
+    const result = auditResults[auditModalEntry.botId];
+
+    if (isLoading) {
+      return (
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)', textAlign: 'center', padding: '20px 0' }}>
+          // Reviewing this bot's history...
+        </div>
+      );
+    }
+
+    if (!result) return null;
+
+    if (result.error) {
+      return (
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--red)' }}>{result.error}</div>
+      );
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {result.overallAssessment && (
+          <div style={{
+            fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)',
+            lineHeight: 1.6, padding: '10px 12px', background: 'var(--bg3)', borderRadius: 6,
+          }}>
+            {result.overallAssessment}
+          </div>
+        )}
+        {result.flags?.length === 0 && (
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--green)' }}>✓ No issues found</div>
+        )}
+        {result.flags?.map((flag, i) => (
+          <div
+            key={i}
+            style={{
+              padding: '10px 12px', background: 'var(--bg3)', borderRadius: 6,
+              borderLeft: `3px solid ${severityColor[flag.severity] || 'var(--blue)'}`,
+            }}
+          >
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
+              {flag.issue}
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+              {flag.reasoning}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   if (!isConnected) {
@@ -117,7 +213,7 @@ export default function TradeHistory() {
           {/* Desktop table */}
           <div className="history-desktop-table" style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
                 <thead>
                   <tr>
                     {['#', 'Bot', 'Asset', 'Final P&L', 'Trades', 'Closed', 'Archived', ''].map(h => (
@@ -143,23 +239,47 @@ export default function TradeHistory() {
                       <td style={tdStyle}>{h.closedAt ? new Date(h.closedAt).toLocaleString() : '—'}</td>
                       <td style={tdStyle}>{new Date(h.archivedAt).toLocaleString()}</td>
                       <td style={tdStyle}>
-                        <button
-                          onClick={e => handleCopyEntry(e, h)}
-                          style={{
-                            background: 'transparent',
-                            color: copiedIndex === h.index ? 'var(--green)' : 'var(--blue)',
-                            border: `1px solid ${copiedIndex === h.index ? 'var(--green)' : 'var(--blue)'}`,
-                            borderRadius: 4,
-                            padding: '3px 8px',
-                            fontSize: 10,
-                            cursor: 'pointer',
-                            fontFamily: 'var(--mono)',
-                            whiteSpace: 'nowrap',
-                            transition: 'color 0.2s, border-color 0.2s',
-                          }}
-                        >
-                          {copiedIndex === h.index ? '✓' : '📋'}
-                        </button>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            onClick={e => handleCopyEntry(e, h)}
+                            style={{
+                              background: 'transparent',
+                              color: copiedIndex === h.index ? 'var(--green)' : 'var(--blue)',
+                              border: `1px solid ${copiedIndex === h.index ? 'var(--green)' : 'var(--blue)'}`,
+                              borderRadius: 4,
+                              padding: '3px 8px',
+                              fontSize: 10,
+                              cursor: 'pointer',
+                              fontFamily: 'var(--mono)',
+                              whiteSpace: 'nowrap',
+                              transition: 'color 0.2s, border-color 0.2s',
+                            }}
+                          >
+                            {copiedIndex === h.index ? '✓' : '📋'}
+                          </button>
+                          <button
+                            onClick={e => handleAuditEntry(e, h)}
+                            style={{
+                              background: 'transparent', color: 'var(--blue)',
+                              border: '1px solid var(--blue)', borderRadius: 4,
+                              padding: '3px 8px', fontSize: 10,
+                              cursor: 'pointer', fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
+                            }}
+                          >
+                            🔍
+                          </button>
+                          <button
+                            onClick={e => handleOpenPnlCard(e, h)}
+                            style={{
+                              background: 'transparent', color: 'var(--blue)',
+                              border: '1px solid var(--blue)', borderRadius: 4,
+                              padding: '3px 8px', fontSize: 10,
+                              cursor: 'pointer', fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
+                            }}
+                          >
+                            💾
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -202,7 +322,7 @@ export default function TradeHistory() {
                     <div style={{ color: 'var(--text-mid)' }}>{new Date(h.archivedAt).toLocaleDateString()}</div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 10 }}>
                   <button
                     onClick={e => handleCopyEntry(e, h)}
                     style={{
@@ -217,7 +337,29 @@ export default function TradeHistory() {
                       transition: 'color 0.2s, border-color 0.2s',
                     }}
                   >
-                    {copiedIndex === h.index ? '✓ Copied' : '📋 Copy Entry'}
+                    {copiedIndex === h.index ? '✓ Copied' : '📋 Copy'}
+                  </button>
+                  <button
+                    onClick={e => handleAuditEntry(e, h)}
+                    style={{
+                      background: 'transparent', color: 'var(--blue)',
+                      border: '1px solid rgba(27,111,248,0.4)', borderRadius: 4,
+                      padding: '4px 10px', fontSize: 10,
+                      cursor: 'pointer', fontFamily: 'var(--mono)',
+                    }}
+                  >
+                    🔍 Audit
+                  </button>
+                  <button
+                    onClick={e => handleOpenPnlCard(e, h)}
+                    style={{
+                      background: 'transparent', color: 'var(--blue)',
+                      border: '1px solid rgba(27,111,248,0.4)', borderRadius: 4,
+                      padding: '4px 10px', fontSize: 10,
+                      cursor: 'pointer', fontFamily: 'var(--mono)',
+                    }}
+                  >
+                    💾 Card
                   </button>
                 </div>
               </div>
@@ -225,6 +367,36 @@ export default function TradeHistory() {
           </div>
         </>
       )}
+
+      {/* Audit results modal — blurred backdrop, replaces the old inline expansion */}
+      <Modal
+        isOpen={!!auditModalEntry}
+        onClose={() => setAuditModalEntry(null)}
+        title={auditModalEntry ? `AI Audit · ${auditModalEntry.botName}` : 'AI Audit'}
+      >
+        {renderAuditModalContent()}
+      </Modal>
+
+      {/* PnL card modal — blurred backdrop, replaces the old inline expansion */}
+      <Modal
+        isOpen={!!pnlModalEntry}
+        onClose={() => setPnlModalEntry(null)}
+        title="Shareable PnL Card"
+      >
+        {pnlModalEntry && (
+          <PnLCard
+            bot={{
+              asset: pnlModalEntry.asset,
+              side: pnlModalEntry.side,
+              filledEntry: pnlModalEntry.filledEntry,
+              positionValueUSDT: pnlModalEntry.positionValueUSDT,
+              finalPnl: pnlModalEntry.finalPnl,
+              finalPnlPercent: pnlModalEntry.finalPnlPercent,
+            }}
+            isClosed={true}
+          />
+        )}
+      </Modal>
 
       <style>{`
         .history-mobile-cards { display: none; }

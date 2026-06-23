@@ -9,6 +9,7 @@ import signalRoutes from './routes/signals.js';
 import coingeckoRoutes from './routes/coingecko.js';
 import whaleRoutes from './routes/whale.js';
 import walletRoutes from './routes/wallet.js';
+import decisionRoutes from './routes/decisions.js'; // NEW (#5, #12)
 
 dotenv.config();
 
@@ -25,6 +26,7 @@ app.use('/api/signals', signalRoutes);
 app.use('/api/coingecko', coingeckoRoutes);
 app.use('/api/whale', whaleRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/decisions', decisionRoutes); // NEW — powers DecisionConsole.jsx and bot auditing
 
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'Stratex API' }));
 

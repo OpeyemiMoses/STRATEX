@@ -35,6 +35,12 @@ export const archiveBot = (bot) => {
     botId: bot.id,
     botName: bot.name,
     asset: bot.asset,
+    // NEW: side wasn't previously archived — without it, anything reading
+    // archived history (the #4 PnL card, the #12/#11 auditors) couldn't tell
+    // long from short on a closed trade. Defaults to 'long' for any bot
+    // archived before this field existed, matching the same fallback used
+    // elsewhere in the codebase for pre-#3 bots.
+    side: bot.side || 'long',
     walletAddress: bot.walletAddress,
     strategy: bot.strategy,
     entryType: bot.entryType,
@@ -44,6 +50,11 @@ export const archiveBot = (bot) => {
     stopLoss: bot.stopLoss,
     positionSize: bot.positionSize,
     positionValueUSDT: bot.positionValueUSDT,
+    // NEW (#3) — leverage context, needed so botAuditor.js can reason about
+    // leveraged trades after the fact, and so a liquidation (vs a normal
+    // SL hit) is distinguishable in historical records.
+    leverage: bot.leverage || 1,
+    liquidationPrice: bot.liquidationPrice || null,
     finalPnl: bot.pnl,
     finalPnlPercent: bot.pnlPercent,
     trades: bot.trades,

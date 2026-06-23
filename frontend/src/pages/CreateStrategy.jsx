@@ -64,7 +64,7 @@ export default function CreateStrategy() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: strategyText }),
       });
-    const data = await res.json();
+      const data = await res.json();
 
       if (data.error) {
         setError(data.error);
@@ -108,7 +108,7 @@ export default function CreateStrategy() {
   };
 
   // ── Step 3: Handle clarification answer ──
-const handleClarifyAnswer = async (answer) => {
+  const handleClarifyAnswer = async (answer) => {
     addChat('ai', clarifyQuestion.question, 'question');
     addChat('user', answer);
 
@@ -150,6 +150,13 @@ const handleClarifyAnswer = async (answer) => {
       updatedParsed[field] = isNaN(num) ? answer : Math.min(num, 100);
     } else if (field === 'positionSizeUSDT') {
       updatedParsed[field] = isNaN(num) ? answer : num;
+    } else if (field === 'leverage') {
+      // "No leverage" -> 1x. "5x" / "10x" / a bare number -> that multiplier.
+      if (/no leverage/.test(lower)) {
+        updatedParsed[field] = 1;
+      } else {
+        updatedParsed[field] = isNaN(num) ? 1 : num;
+      }
     } else if (field === 'timeframe') {
       const tfMap = {
         '1 minute': '1m', '1m': '1m',
@@ -211,7 +218,8 @@ const handleClarifyAnswer = async (answer) => {
       : chosenStrategy === 'user'
       ? analysis.userStrategy
       : analysis.saferStrategy;
-const botPayload = {
+
+    const botPayload = {
       name: botName,
       strategy: strategyText,
       asset: parsed.asset || 'BTCUSDT',
@@ -223,6 +231,11 @@ const botPayload = {
       stopLoss: strategy.stopLossPrice,
       positionSize: strategy.positionSizePercent,
       walletAddress: address,
+      // NEW (#3): leverage flows from whichever strategy version was chosen
+      // (user's or AI's safer version) — falls back to the originally parsed
+      // value, then 1x, so a leverage value never silently disappears between
+      // parse → analyse → create even if the chosen strategy object omits it.
+      leverage: strategy.leverage ?? parsed.leverage ?? 1,
     };
 
     try {
@@ -299,7 +312,7 @@ const botPayload = {
                 value={strategyText}
                 onChange={e => setStrategyText(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) handleParse(); }}
-                placeholder={`e.g. "Buy BTC at $60k with 10% of my portfolio and sell at $61k"\ne.g. "Short ETH when RSI hits 80, use 5% of portfolio, stop loss at 5%"\ne.g. "Buy SOL now and sell half at $200, rest at $220"`}
+                placeholder={`e.g. "Buy BTC at $60k with 10% of my portfolio and sell at $61k"\ne.g. "Short ETH when RSI hits 80, use 5% of portfolio, stop loss at 5%"\ne.g. "Buy SOL now with 5x leverage and sell half at $200, rest at $220"`}
                 style={{
                   width: '100%', minHeight: 120, background: '#060A10',
                   border: '1px solid var(--border)', borderRadius: 6,
@@ -488,7 +501,7 @@ const botPayload = {
             </span>
           </div>
 
-        {/* Strategy comparison */}
+          {/* Strategy comparison */}
           <div className="strategy-comparison-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
             {['user', 'safer'].map(type => {
               const s = type === 'user' ? analysis.userStrategy : analysis.saferStrategy;
@@ -529,12 +542,17 @@ const botPayload = {
                     )}
                   </div>
 
-                  {/* Fields — editable if editing */}
+                  {/* Fields — editable if editing.
+                      NEW (#3): Leverage row added — only rendered when the
+                      strategy actually has leverage > 1x, so unleveraged
+                      strategies (the common case) keep the original compact
+                      card layout with no empty/irrelevant row. */}
                   {[
                     { l: 'Entry', k: 'entryPrice', prefix: '$' },
                     { l: 'Take Profit', k: 'takeProfitPrice', prefix: '$' },
                     { l: 'Stop Loss', k: 'stopLossPrice', prefix: '$' },
                     { l: 'Position Size', k: 'positionSizePercent', suffix: '%' },
+                    ...(s.leverage && s.leverage > 1 ? [{ l: 'Leverage', k: 'leverage', suffix: 'x' }] : []),
                     { l: 'Risk/Reward', k: 'riskRewardRatio', raw: true },
                   ].map(field => (
                     <div key={field.k} style={{
@@ -556,7 +574,9 @@ const botPayload = {
                           }}
                         />
                       ) : (
-                        <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500 }}>
+                        <span style={{
+                          fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500,
+                        }}>
                           {field.raw ? s[field.k] : `${field.prefix || ''}${s[field.k]}${field.suffix || ''}`}
                         </span>
                       )}

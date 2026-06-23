@@ -10,6 +10,7 @@ import Signals from './pages/Signals.jsx';
 import Bots from './pages/Bots.jsx';
 import QwenAnalysis from './pages/QwenAnalysis.jsx';
 import TradeHistory from './pages/TradeHistory.jsx';
+import DecisionConsole from './components/DecisionConsole.jsx'; // NEW (#5)
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -91,6 +92,9 @@ export default function App() {
           <Route path="/history" element={<TradeHistory />} />
         </Routes>
       </AnimatedPage>
+      {/* Mounted outside AnimatedPage so it persists across route changes
+          instead of fading in/out on every navigation (#5) */}
+      <DecisionConsole />
     </div>
   );
 }

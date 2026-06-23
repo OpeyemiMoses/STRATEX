@@ -5,6 +5,7 @@ import PnLChart from '../components/PnLChart.jsx';
 import Badge from '../components/Badge.jsx';
 import Toggle from '../components/Toggle.jsx';
 import AssetIcon from '../components/AssetIcon.jsx';
+import PnLCard from '../components/PnLCard.jsx'; // NEW (#4)
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -16,9 +17,17 @@ export default function BotDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [closing, setClosing] = useState(false);
 
+  // NEW (#12) — bot auditing state
+  const [auditing, setAuditing] = useState(false);
+  const [auditResult, setAuditResult] = useState(null);
+  const [auditError, setAuditError] = useState('');
+
+  // NEW (#4) — toggle the downloadable PnL card panel
+  const [showPnlCard, setShowPnlCard] = useState(false);
+
   const bot = bots.find(b => b.id === id);
 
-const handleClosePosition = async () => {
+  const handleClosePosition = async () => {
     if (!window.confirm('Closing will fetch the latest live price, which may differ slightly from what you see now. Continue?')) return;
     setClosing(true);
     try {
@@ -29,6 +38,23 @@ const handleClosePosition = async () => {
       alert('Failed to close position. Please try again.');
     } finally {
       setClosing(false);
+    }
+  };
+
+  // NEW (#12)
+  const handleAuditBot = async () => {
+    setAuditing(true);
+    setAuditError('');
+    setAuditResult(null);
+    try {
+      const res = await fetch(`${API}/api/bots/${bot.id}/audit`, { method: 'POST' });
+      if (!res.ok) throw new Error('Audit failed');
+      const data = await res.json();
+      setAuditResult(data);
+    } catch (err) {
+      setAuditError('Failed to audit this bot. Please try again.');
+    } finally {
+      setAuditing(false);
     }
   };
 
@@ -68,8 +94,15 @@ const handleClosePosition = async () => {
     fontFamily: 'var(--mono)',
   };
 
+  const severityColor = {
+    info: 'var(--blue)',
+    warning: '#F59E0B',
+    critical: 'var(--red)',
+  };
+
   // Real trade log — USER
   const tradelog = bot.tradelog || [];
+  const hasLeverage = bot.leverage && bot.leverage > 1;
 
   return (
     <div style={{ padding: 20 }}>
@@ -82,7 +115,7 @@ const handleClosePosition = async () => {
 
       {/* Bot Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-       <div style={{
+        <div style={{
           width: 44, height: 44, borderRadius: 8,
           background: `${bot.color || '#1B6FF8'}22`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -91,7 +124,20 @@ const handleClosePosition = async () => {
           <AssetIcon asset={bot.asset} size={28} fallback={bot.emoji || '⚡'} fallbackColor={bot.color || '#1B6FF8'} />
         </div>
         <div>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>{bot.name}</div>
+          <div style={{ fontWeight: 600, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+            {bot.name}
+            {/* NEW (#3) — leverage badge, only shown when leveraged */}
+            {hasLeverage && (
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
+                color: '#F59E0B', background: 'rgba(245,158,11,0.1)',
+                border: '1px solid rgba(245,158,11,0.3)',
+                padding: '2px 6px', borderRadius: 4,
+              }}>
+                {bot.leverage}x
+              </span>
+            )}
+          </div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
             {bot.asset} · {bot.timeframe}
           </div>
@@ -110,7 +156,7 @@ const handleClosePosition = async () => {
         {/* Left */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-    {/* Current Position */}
+          {/* Current Position */}
           <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -134,7 +180,7 @@ const handleClosePosition = async () => {
                 borderRadius: 8,
               }}>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
-                  Unrealized P&L (live)
+                  Unrealized P&L (live){hasLeverage ? ` · ${bot.leverage}x leverage` : ''}
                 </div>
                 <div style={{
                   fontFamily: 'var(--mono)', fontSize: 22, fontWeight: 700,
@@ -146,18 +192,29 @@ const handleClosePosition = async () => {
                   </span>
                 </div>
                 {bot.lastPrice && (
+                  // FIXED: was hardcoded "updates every 60s" — simulator now polls every 5s
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 6 }}>
-                    Current price: ${bot.lastPrice} · updates every 60s
+                    Current price: ${bot.lastPrice} · updates every 5s
+                  </div>
+                )}
+                {/* NEW (#3) — liquidation warning, only for leveraged positions */}
+                {hasLeverage && bot.liquidationPrice && (
+                  <div style={{
+                    fontFamily: 'var(--mono)', fontSize: 10, color: '#F59E0B',
+                    marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(245,158,11,0.2)',
+                  }}>
+                    ⚠ Liquidation price: ${Number(bot.liquidationPrice).toFixed(2)}
                   </div>
                 )}
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${hasLeverage ? 4 : 3}, 1fr)`, gap: 16 }}>
               {[
                 { l: bot.position === 'open' || bot.position === 'closed' ? 'Filled Entry' : 'Target Entry', v: bot.filledEntry ? `$${bot.filledEntry}` : (bot.entryPrice ? `$${bot.entryPrice}` : 'Market Price') },
                 { l: 'Take Profit', v: bot.takeProfit ? `$${bot.takeProfit}` : '—' },
                 { l: 'Stop Loss', v: bot.stopLoss ? `$${bot.stopLoss}` : '—' },
+                ...(hasLeverage ? [{ l: 'Leverage', v: `${bot.leverage}x`, c: '#F59E0B' }] : []),
               ].map(m => (
                 <div key={m.l}>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
@@ -195,6 +252,31 @@ const handleClosePosition = async () => {
             </div>
           </div>
 
+          {/* NEW (#4) — Downloadable PnL card */}
+          {(bot.position === 'open' || bot.position === 'closed') && (
+            <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
+              <div
+                onClick={() => setShowPnlCard(v => !v)}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  Shareable PnL Card
+                </div>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--blue)' }}>
+                  {showPnlCard ? '▲ Hide' : '▼ Show'}
+                </span>
+              </div>
+              {showPnlCard && (
+                <div style={{ marginTop: 14 }}>
+                  <PnLCard bot={bot} isClosed={bot.position === 'closed'} />
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Metrics */}
           <div style={{
             display: 'grid',
@@ -202,7 +284,7 @@ const handleClosePosition = async () => {
             gap: 12,
           }}>
             {[
-             { l: 'Total P&L', v: `${bot.pnl >= 0 ? '+' : ''}$${bot.pnl?.toFixed(2) ?? '0.00'}${bot.pnlPercent != null ? ` (${bot.pnlPercent >= 0 ? '+' : ''}${bot.pnlPercent.toFixed(2)}%)` : ''}`, c: bot.pnl >= 0 ? 'var(--green)' : 'var(--red)' },
+              { l: 'Total P&L', v: `${bot.pnl >= 0 ? '+' : ''}$${bot.pnl?.toFixed(2) ?? '0.00'}${bot.pnlPercent != null ? ` (${bot.pnlPercent >= 0 ? '+' : ''}${bot.pnlPercent.toFixed(2)}%)` : ''}`, c: bot.pnl >= 0 ? 'var(--green)' : 'var(--red)' },
               { l: 'Win Rate', v: `${bot.winRate?.toFixed(1) ?? '0.0'}%`, c: 'var(--text)' },
               { l: 'Total Trades', v: bot.trades ?? 0, c: 'var(--text)' },
             ].map(m => (
@@ -215,6 +297,71 @@ const handleClosePosition = async () => {
                 </div>
               </div>
             ))}
+          </div>
+
+          {/* NEW (#12) — Bot Audit */}
+          <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                AI Audit
+              </div>
+              <button
+                onClick={handleAuditBot}
+                disabled={auditing}
+                style={{
+                  background: 'transparent', color: 'var(--blue)',
+                  border: '1px solid var(--blue)', borderRadius: 5,
+                  padding: '4px 12px', fontSize: 11, cursor: auditing ? 'wait' : 'pointer',
+                  fontFamily: 'var(--mono)',
+                }}
+              >
+                {auditing ? 'Auditing...' : '🔍 Audit This Bot'}
+              </button>
+            </div>
+
+            {auditError && (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)' }}>{auditError}</div>
+            )}
+
+            {auditResult && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {auditResult.overallAssessment && (
+                  <div style={{
+                    fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-mid)',
+                    lineHeight: 1.6, padding: '8px 10px', background: 'var(--bg3)', borderRadius: 6,
+                  }}>
+                    {auditResult.overallAssessment}
+                  </div>
+                )}
+                {auditResult.flags?.length === 0 && (
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--green)' }}>
+                    ✓ No issues found
+                  </div>
+                )}
+                {auditResult.flags?.map((flag, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      padding: '8px 10px', background: 'var(--bg3)', borderRadius: 6,
+                      borderLeft: `3px solid ${severityColor[flag.severity] || 'var(--blue)'}`,
+                    }}
+                  >
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
+                      {flag.issue}
+                    </div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+                      {flag.reasoning}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!auditResult && !auditError && !auditing && (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                // Run an AI review of this bot's decisions and risk management
+              </div>
+            )}
           </div>
 
           {/* Trade Log */}
@@ -232,7 +379,7 @@ const handleClosePosition = async () => {
                   ))}
                 </tr>
               </thead>
-             <tbody>
+              <tbody>
                 {tradelog.length === 0 ? (
                   <tr>
                     <td colSpan={5} style={{ ...tdStyle, textAlign: 'center', padding: '30px 12px', color: 'var(--text-dim)' }}>
@@ -247,7 +394,7 @@ const handleClosePosition = async () => {
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
                       <td style={tdStyle}>{t.time}</td>
-                      <td style={{ ...tdStyle, color: t.side === 'Long' ? 'var(--green)' : 'var(--red)' }}>{t.side}</td>
+                      <td style={{ ...tdStyle, color: t.side === 'Long' ? 'var(--green)' : t.side === 'Liquidated' ? '#F59E0B' : 'var(--red)' }}>{t.side}</td>
                       <td style={tdStyle}>{t.price}</td>
                       <td style={tdStyle}>{t.size}</td>
                       <td style={{ ...tdStyle, color: 'var(--green)' }}>{t.pnl}</td>
@@ -298,13 +445,17 @@ const handleClosePosition = async () => {
               Strategy Settings
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-           {[
+              {[
                 { l: 'Asset', v: bot.asset },
                 { l: 'Timeframe', v: bot.timeframe },
                 { l: 'Entry Price', v: bot.entryPrice ? `$${bot.entryPrice}` : '—' },
                 { l: 'Stop Loss', v: bot.stopLoss ? `$${bot.stopLoss}` : '—' },
                 { l: 'Take Profit', v: bot.takeProfit ? `$${bot.takeProfit}` : '—' },
                 { l: 'Position Size', v: bot.positionSize ? `${bot.positionSize}% of balance` : '—' },
+                ...(hasLeverage ? [
+                  { l: 'Leverage', v: `${bot.leverage}x` },
+                  { l: 'Liquidation Price', v: bot.liquidationPrice ? `$${Number(bot.liquidationPrice).toFixed(2)}` : '—' },
+                ] : []),
               ].map(m => (
                 <div key={m.l} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid rgba(30,45,69,0.5)' }}>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>{m.l}</span>
@@ -346,10 +497,10 @@ const handleClosePosition = async () => {
               }}
             >
               {confirmDelete ? '⚠️ Confirm Delete' : '🗑 Delete Bot'}
-            
+
             </button>
           </div>
-           <div style={{ padding: 20, paddingBottom: 20 }}></div>
+          <div style={{ padding: 20, paddingBottom: 20 }}></div>
         </div>
       </div>
 

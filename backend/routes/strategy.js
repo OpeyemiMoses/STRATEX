@@ -41,7 +41,7 @@ router.post('/parse', async (req, res) => {
     const detectedAsset = assetRaw.trim().toUpperCase().replace(/[^A-Z]/g, '');
     const assetGuess = /USDT$/.test(detectedAsset) ? detectedAsset : `${detectedAsset}USDT`;
 
- let livePrice = null;
+    let livePrice = null;
     let assetUnavailable = false;
     try {
       const priceRes = await axios.get(`https://api.bitget.com/api/v2/spot/market/tickers?symbol=${assetGuess}`);
@@ -79,6 +79,7 @@ You MUST return a JSON object with EXACTLY these field names, no others, no rena
   "positionSizePercent": null,
   "positionSizeUSDT": null,
   "timeframe": "1h",
+  "leverage": 1,
   "missing": [],
   "summary": "one sentence summary"
 }
@@ -87,11 +88,13 @@ Rules:
 - Field names must match exactly as shown above. Do NOT use "symbol", "entry", "take_profit", "stop_loss", "direction", or any other naming.
 - "entryType" must be "market" if the user wants to buy/sell immediately at current price (e.g. "buy now", "buy at current price", no specific price mentioned), or "limit" if the user specified a target price to wait for (e.g. "buy at $60k", "buy when it drops to $65").
 - "asset" must be a Bitget-style symbol like BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT.
+- "leverage" must be a number, 1 to 125. Extract it ONLY if the user explicitly mentions leverage (e.g. "5x leverage", "10x", "with 3x leverage on this trade") — do NOT infer leverage from context, only from explicit mention. If the user did not mention leverage, set this to null (not 1) — the user will be asked directly. If the extracted leverage is above 20, mention in the summary that this is a high-risk leverage level.
 - "missing" is an array of field names (from the list above) that the user did not specify and are needed: entryPrice or entryCondition, takeProfitPrice or takeProfitPercent, stopLossPrice or stopLossPercent, positionSizePercent or positionSizeUSDT.
+- ALWAYS add "leverage" to "missing" UNLESS the user explicitly mentioned a leverage number in their text. This means leverage is now a required clarifying question for every strategy that didn't explicitly state it, same as stop loss.
 - If stop loss wasn't mentioned, add "stopLossPrice" to "missing" — do not invent one.
 - Return ONLY the JSON object. No markdown fences, no preamble, no explanation. Your response must start with { and end with }.`;
 
-   const raw = await qwen([{ role: 'user', content: text }], system);
+    const raw = await qwen([{ role: 'user', content: text }], system);
     let clean = raw.replace(/```json|```/g, '').trim();
     // Strip any preamble text before the first { and after the last }
     const firstBrace = clean.indexOf('{');
@@ -151,6 +154,10 @@ router.post('/clarify', async (req, res) => {
       question: 'What timeframe should the bot monitor for this strategy?',
       options: ['1 minute', '5 minutes', '1 hour', '4 hours', '1 day'],
     },
+    'leverage': {
+      question: 'Do you want to use leverage on this trade?',
+      options: ['No leverage', '2x', '5x', '10x'],
+    },
   };
 
   const q = questionMap[missingField] || {
@@ -173,6 +180,11 @@ A user has described a trading strategy and you must:
 2. Suggest a safer version with improved risk/reward
 3. Explain your reasoning clearly but concisely
 
+If the strategy includes leverage above 1x, factor that into your risk assessment — higher leverage
+means a smaller adverse price move can wipe out the position (liquidation risk), so the "safer"
+version should generally recommend lower leverage when the user's leverage is aggressive (above ~10x),
+and should explicitly mention liquidation risk in riskReasons when leverage is a meaningful risk factor.
+
 Return ONLY valid JSON, no markdown:
 {
   "riskLevel": "low" | "medium" | "high",
@@ -182,6 +194,7 @@ Return ONLY valid JSON, no markdown:
     "takeProfitPrice": number,
     "stopLossPrice": number,
     "positionSizePercent": number,
+    "leverage": number,
     "riskRewardRatio": "e.g. 1:2",
     "verdict": "short verdict on this strategy"
   },
@@ -190,6 +203,7 @@ Return ONLY valid JSON, no markdown:
     "takeProfitPrice": number,
     "stopLossPrice": number,
     "positionSizePercent": number,
+    "leverage": number,
     "riskRewardRatio": "e.g. 1:3",
     "changes": ["what changed and why"],
     "verdict": "short verdict on safer version"
