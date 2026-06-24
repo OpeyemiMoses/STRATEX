@@ -174,7 +174,7 @@ export default function Bots() {
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
               <thead>
                 <tr>
-                  {['Bot', 'Asset', 'Status', 'P&L', 'Win Rate', 'Trades', 'Created', 'Active', 'Actions'].map(h => (
+                  {['Bot', 'Asset', 'Status', 'P&L', 'Win Rate', 'Trades', 'Created', 'Actions'].map(h => (
                     <th key={h} style={thStyle}>{h}</th>
                   ))}
                 </tr>
@@ -255,13 +255,7 @@ export default function Bots() {
                       {new Date(bot.createdAt).toLocaleDateString()}
                     </td>
 
-                    {/* Toggle */}
-                    <td style={{ padding: '12px', borderBottom: '1px solid rgba(30,45,69,0.5)' }}>
-                      <Toggle
-                        checked={bot.status === 'active'}
-                        onChange={e => { e.stopPropagation(); toggleBot(bot.id); }}
-                      />
-                    </td>
+                    
 
                     {/* Actions */}
                     <td style={{ padding: '12px', borderBottom: '1px solid rgba(30,45,69,0.5)' }}>
@@ -355,10 +349,7 @@ export default function Bots() {
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Toggle
-                    checked={bot.status === 'active'}
-                    onChange={e => { e.stopPropagation(); toggleBot(bot.id); }}
-                  />
+                 
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button
                       onClick={e => handleBacktest(e, bot)}

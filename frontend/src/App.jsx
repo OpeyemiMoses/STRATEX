@@ -11,7 +11,7 @@ import Bots from './pages/Bots.jsx';
 import QwenAnalysis from './pages/QwenAnalysis.jsx';
 import TradeHistory from './pages/TradeHistory.jsx';
 import DecisionConsole from './components/DecisionConsole.jsx';
-import { toast } from './components/Toast.jsx'; // NEW (#5)
+import { ToastContainer } from './components/Toast.jsx'; // NEW (#5)
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -96,6 +96,7 @@ export default function App() {
       {/* Mounted outside AnimatedPage so it persists across route changes
           instead of fading in/out on every navigation (#5) */}
       <DecisionConsole />
+      <ToastContainer /> {/* NEW (#5) */}
     </div>
   );
 }

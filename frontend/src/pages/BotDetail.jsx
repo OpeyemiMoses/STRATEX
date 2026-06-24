@@ -31,7 +31,9 @@ export default function BotDetail() {
   const bot = bots.find(b => b.id === id);
 
   const handleClosePosition = async () => {
-    if (!window.confirm('Closing will fetch the latest live price, which may differ slightly from what you see now. Continue?')) return;
+    const confirmed = await toast.confirm(
+      `Close position now? This will fetch the latest live price, which may differ slightly from what you see.`);
+    if (!confirmed) return;
     setClosing(true);
     try {
       const res = await fetch(`${API}/api/bots/${bot.id}/close`, { method: 'POST' });
@@ -74,10 +76,19 @@ export default function BotDetail() {
   );
 
   const handleDelete = async () => {
-    if (!confirmDelete) { setConfirmDelete(true); return; }
+    const confirmed = await toast.confirm('Delete this bot? This cannot be undone.');
+    if (!confirmed) return;
     await deleteBot(bot.id);
     navigate('/dashboard');
   };
+  const handleToggle = async () => {
+  if (bot.position === 'open') {
+    toast.warning('Cannot pause a bot with an open position. Close the position first.');
+    return;
+  }
+  await toggleBot(bot.id);
+};
+
 
   const tdStyle = {
     padding: '10px 12px',
@@ -528,7 +539,7 @@ export default function BotDetail() {
               </span>
               <Toggle
                 checked={bot.status === 'active'}
-                onChange={() => toggleBot(bot.id)}
+                onChange={handleToggle}
               />
             </div>
 

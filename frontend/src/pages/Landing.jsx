@@ -27,7 +27,7 @@ export default function Landing() {
           letterSpacing: '0.12em',
           marginBottom: 16,
         }}>
-          // Bitget AI Hackathon S1 · Powered by Qwen
+          // Bitget AI Hackathon S1 · Powered by BITGET
         </div>
 
         <h1 style={{
@@ -48,10 +48,10 @@ export default function Landing() {
           lineHeight: 1.6,
           marginBottom: 20,
         }}>
-          Type any trading idea in plain English. Stratex asks what's missing,
-          analyses the risk, and proposes a safer version before anything goes live.
+          Type any trading idea in plain English. Stratex
+          analyses the risk, proposes a safer version before anything goes live.
           Once running, the AI keeps watching the position and can adjust your
-          stop-loss or take-profit if conditions change — and you can ask it to
+          stop-loss or take-profit if conditions change — it can also
           audit its own decisions at any time.
         </p>
 
@@ -288,7 +288,7 @@ export default function Landing() {
         <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
           Powered by
         </span>
-        {['Bitget', 'Qwen AI', 'RainbowKit'].map(p => (
+        {['Bitget API', 'Qwen AI'].map(p => (
           <span key={p} style={{
             fontFamily: 'var(--mono)',
             fontSize: 11,
