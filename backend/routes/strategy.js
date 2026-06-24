@@ -249,6 +249,22 @@ and should explicitly mention liquidation risk in riskReasons when leverage is a
 Also factor current volatility into the leverage recommendation: high-volatility conditions make any
 given leverage level riskier than the same leverage would be in calmer conditions.
 
+The user's original direction is "${parsed.action === 'sell' ? 'short' : 'long'}". Both userStrategy
+and saferStrategy MUST include a "side" field ("long" or "short"). userStrategy.side should normally
+just echo the user's original direction unless their own numbers are logically inconsistent with it
+(e.g. they said "buy" but their stop loss is above entry and take profit is below it -- that is
+actually a short, not a long, regardless of which word they used).
+
+saferStrategy.side is allowed to differ from the user's original direction. If current market
+conditions (the regime, recent net change, momentum) genuinely favor the opposite direction --
+for example the user wants to go long but the pair is in a clear downtrend -- set saferStrategy.side
+to the direction you actually recommend, NOT the user's original direction. This is a real, structural
+recommendation, not just commentary: if you say "safer to short this instead" anywhere in your
+reasoning, saferStrategy.side MUST be "short" and saferStrategy.entryPrice/takeProfitPrice/stopLossPrice
+MUST be consistent with a short (take profit below entry, stop loss above entry). Never describe a
+direction flip in "changes" or "verdict" without setting "side" to match -- the side field is what
+the system actually acts on, prose is not enough.
+
 Return ONLY valid JSON, no markdown:
 {
   "riskLevel": "low" | "medium" | "high",
@@ -256,6 +272,7 @@ Return ONLY valid JSON, no markdown:
   "shouldTradeNow": boolean,
   "shouldTradeNowReason": "1-2 sentences -- if false, explain why this pair/timing is not favorable right now, even though a strategy can still technically be created",
   "userStrategy": {
+    "side": "long" | "short",
     "entryPrice": number,
     "takeProfitPrice": number,
     "stopLossPrice": number,
@@ -265,13 +282,14 @@ Return ONLY valid JSON, no markdown:
     "verdict": "short verdict on this strategy"
   },
   "saferStrategy": {
+    "side": "long" | "short",
     "entryPrice": number,
     "takeProfitPrice": number,
     "stopLossPrice": number,
     "positionSizePercent": number,
     "leverage": number,
     "riskRewardRatio": "e.g. 1:3",
-    "changes": ["what changed and why -- referencing actual current market conditions where relevant"],
+    "changes": ["what changed and why -- referencing actual current market conditions where relevant. If side differs from the user's original direction, the FIRST change listed must explicitly say so, e.g. 'Switched from long to short because...'"],
     "verdict": "short verdict on safer version"
   },
   "recommendation": "which version you recommend and why in 1-2 sentences"
@@ -283,6 +301,19 @@ Return ONLY valid JSON, no markdown:
     );
     const clean = raw.replace(/```json|```/g, '').trim();
     const analysis = JSON.parse(clean);
+
+    // NEW — defensive fallback: if Qwen omits "side" on either strategy
+    // (older clients, malformed response, etc.), default each one to the
+    // user's original parsed direction rather than leaving it undefined.
+    // This guarantees CreateStrategy.jsx always has a side to read, even
+    // in a degraded case, without silently producing the WRONG side.
+    const originalSide = parsed.action === 'sell' ? 'short' : 'long';
+    if (analysis.userStrategy && !analysis.userStrategy.side) {
+      analysis.userStrategy.side = originalSide;
+    }
+    if (analysis.saferStrategy && !analysis.saferStrategy.side) {
+      analysis.saferStrategy.side = originalSide;
+    }
 
     // Always attach the raw market state + fit assessment too, so the
     // frontend can show this even if Qwen's own shouldTradeNow field is

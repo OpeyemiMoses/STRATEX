@@ -122,6 +122,8 @@ PORT=5000
 QWEN_API_KEY=your_qwen_api_key
 QWEN_BASE_URL=your_qwen_base_url
 COINGECKO_API_KEY=your_coingecko_api_key
+
+# Present but unused — real order execution is intentionally not implemented
 BITGET_API_KEY=
 BITGET_SECRET_KEY=
 BITGET_PASSPHRASE=
@@ -180,6 +182,32 @@ stratex/
 
 ---
 
-## License
+## Submission artifacts: trading log & backtest report
+
+Two standalone scripts generate the artifacts required for hackathon submission. Both read directly from `backend/data/` and write to folders at the repo root — no running server required, safe to run locally or in any environment with access to the data files.
+
+### Trading log
+
+Generates a complete, timestamped ledger of every trade fill (entry and exit legs) across all wallets — required for the "verifiable usage record" submission requirement.
+
+```bash
+cd backend
+node scripts/export-trading-log.js
+```
+
+Outputs `trading-log/trading-log.csv` and `trading-log/trading-log.md` at the repo root, with one row per fill: timestamp, trading pair, direction, price, quantity, and account balance change.
+
+### Backtest report
+
+Re-runs every currently active bot's exact strategy configuration through Stratex's real backtest engine — the same code path used live during bot creation — against real historical Bitget data. Satisfies the requirement that a backtest report include the code used to generate it and be independently reproducible.
+
+```bash
+cd backend
+node scripts/export-backtest-report.js
+```
+
+Outputs `backtest-report/backtest-report.md` and `backtest-report/backtest-report.csv` at the repo root, with a full regime-by-regime breakdown and confidence rating (robustness score, risk level, overfitting risk, market adaptability) per bot. Requires network access to Bitget's public API and may take a few seconds per bot to run.
+
+
 
 MIT

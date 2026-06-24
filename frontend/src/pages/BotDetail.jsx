@@ -6,7 +6,8 @@ import Badge from '../components/Badge.jsx';
 import Toggle from '../components/Toggle.jsx';
 import AssetIcon from '../components/AssetIcon.jsx';
 import PnLCard from '../components/PnLCard.jsx'; // NEW (#4)
-import Modal from '../components/Modal.jsx'; // NEW — modal wrapper for audit + PnL card
+import Modal from '../components/Modal.jsx';
+import { toast } from '../components/Toast.jsx'; // NEW — modal wrapper for audit + PnL card
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -35,9 +36,10 @@ export default function BotDetail() {
     try {
       const res = await fetch(`${API}/api/bots/${bot.id}/close`, { method: 'POST' });
       if (!res.ok) throw new Error('Failed to close');
+       toast.success('Position closed successfully.');
       await refetch();
     } catch (err) {
-      alert('Failed to close position. Please try again.');
+     toast.error('Failed to close position. Please try again.');
     } finally {
       setClosing(false);
     }

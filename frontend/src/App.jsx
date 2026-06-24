@@ -10,7 +10,8 @@ import Signals from './pages/Signals.jsx';
 import Bots from './pages/Bots.jsx';
 import QwenAnalysis from './pages/QwenAnalysis.jsx';
 import TradeHistory from './pages/TradeHistory.jsx';
-import DecisionConsole from './components/DecisionConsole.jsx'; // NEW (#5)
+import DecisionConsole from './components/DecisionConsole.jsx';
+import { toast } from './components/Toast.jsx'; // NEW (#5)
 
 function ScrollToTop() {
   const { pathname } = useLocation();

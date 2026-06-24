@@ -33,7 +33,7 @@ export default function CreateStrategy() {
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [chatHistory, setChatHistory] = useState([]);
-  // NEW (Section 3) — dismissible soft warning when AI says don't trade this pair right now
+  // Dismissible soft warning when AI says don't trade this pair right now
   const [dismissWarning, setDismissWarning] = useState(false);
 
   const addChat = (role, content, type = 'text') => {
@@ -165,7 +165,8 @@ export default function CreateStrategy() {
       setAnalysis(data.analysis);
       setChosenStrategy('safer');
       // Seed each card's edits from the original AI values — never touched again
-      // by card clicks or selection changes
+      // by card clicks or selection changes. This now includes "side" since
+      // the backend always returns it (echoed or flipped) on both strategies.
       setUserEdits(data.analysis.userStrategy);
       setSaferEdits(data.analysis.saferStrategy);
       setEditingStrategy(null);
@@ -185,12 +186,25 @@ export default function CreateStrategy() {
     // and accumulate user changes independently per card
     const strategy = chosenStrategy === 'user' ? userEdits : saferEdits;
 
+    // FIX: side must come from the CHOSEN strategy, not from the original
+    // parsed text. Previously this always read parsed.action, so if the
+    // user picked the AI's "safer" version and that version recommended
+    // the opposite direction (e.g. user said "long", AI said "actually
+    // short is safer right now"), the bot still deployed as the original
+    // long — silently ignoring the AI's actual recommendation. Now it
+    // reads strategy.side first (set on both userStrategy and saferStrategy
+    // by the backend), and only falls back to parsed.action if that's
+    // somehow missing (defensive — backend already guarantees it).
+    const resolvedSide = strategy.side === 'short' || strategy.side === 'long'
+      ? strategy.side
+      : (parsed.action === 'sell' ? 'short' : 'long');
+
     const botPayload = {
       name: botName,
       strategy: strategyText,
       asset: parsed.asset || 'BTCUSDT',
       timeframe: parsed.timeframe || '1h',
-      side: parsed.action === 'sell' ? 'short' : 'long',
+      side: resolvedSide,
       entryPrice: strategy.entryPrice,
       entryType: parsed.entryType || 'limit',
       takeProfit: strategy.takeProfitPrice,
@@ -207,15 +221,15 @@ export default function CreateStrategy() {
         body: JSON.stringify(botPayload),
       });
       if (!res.ok) {
-        // NEW — surface the server's actual error (e.g. the mandatory
-        // risk-layer 400 from Section 3) instead of a generic message
+        // Surface the server's actual error (e.g. the mandatory risk-layer
+        // 400 from Section 3) instead of a generic message
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || 'Failed to create bot. Please try again.');
       }
       const newBot = await res.json();
-      // NEW — go straight to the bot's detail page so the confidence
-      // rating (robustness score, risk/overfitting/adaptability) is
-      // visible immediately instead of landing back on the bots list
+      // Go straight to the bot's detail page so the confidence rating
+      // (robustness score, risk/overfitting/adaptability) is visible
+      // immediately instead of landing back on the bots list
       navigate(`/bot/${newBot.id}`);
     } catch (err) {
       setError(err.message || 'Failed to create bot. Please try again.');
@@ -224,6 +238,10 @@ export default function CreateStrategy() {
   };
 
   const riskColor = { low: 'var(--green)', medium: '#F59E0B', high: 'var(--red)' };
+
+  // Does the AI's safer version disagree with the user's own version on direction?
+  const sideConflict = analysis?.userStrategy?.side && analysis?.saferStrategy?.side
+    && analysis.userStrategy.side !== analysis.saferStrategy.side;
 
   return (
     <div style={{ padding: 20, paddingBottom: 80, maxWidth: 860, margin: '0 auto' }}>
@@ -441,7 +459,7 @@ export default function CreateStrategy() {
             </span>
           </div>
 
-          {/* NEW (Section 3) — current market-state strip for this pair */}
+          {/* Current market-state strip for this pair */}
           {analysis.marketState && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
@@ -467,9 +485,35 @@ export default function CreateStrategy() {
             </div>
           )}
 
-          {/* NEW (Section 3) — soft "AI recommends waiting" warning. Informational
-              only: does NOT block bot creation, per explicit product decision.
-              Dismissible so it doesn't nag once seen. */}
+          {/* NEW — direction-flip alert. Distinct from the "don't trade now"
+              warning below: this fires whenever the AI's safer version
+              recommends the OPPOSITE side from the user's own version,
+              regardless of shouldTradeNow. This is the exact scenario that
+              caused the bug — surfacing it loudly here means it's seen
+              before deployment, not discovered after. */}
+          {sideConflict && (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12,
+              padding: '12px 16px', background: 'rgba(27,111,248,0.06)',
+              border: '1px solid rgba(27,111,248,0.35)', borderRadius: 8,
+            }}>
+              <span style={{ fontSize: 14, lineHeight: '1.4' }}>⇄</span>
+              <div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--blue)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                  AI recommends the opposite direction
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)', lineHeight: 1.6 }}>
+                  You described a <strong style={{ color: 'var(--text)' }}>{analysis.userStrategy.side}</strong>, but the AI's safer version is a{' '}
+                  <strong style={{ color: 'var(--text)' }}>{analysis.saferStrategy.side}</strong> based on current market conditions.
+                  Check which card you select below — the deployed bot will use whichever side that card shows.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Soft "AI recommends waiting" warning. Informational only:
+              does NOT block bot creation. Dismissible so it doesn't nag
+              once seen. */}
           {analysis.shouldTradeNow === false && !dismissWarning && (
             <div style={{
               display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 20,
@@ -507,6 +551,7 @@ export default function CreateStrategy() {
               const isChosen = chosenStrategy === type;
               const isEditing = editingStrategy === type;
               const edits = getEdits(type);
+              const cardSide = edits.side ?? s.side; // side, respecting manual edits if ever made editable later
 
               return (
                 <div
@@ -537,6 +582,24 @@ export default function CreateStrategy() {
                       </div>
                     )}
                   </div>
+
+                  {/* NEW — explicit side badge so direction is never silently
+                      hidden inside an entry/TP/SL price comparison. This is
+                      the whole point of the fix: you should never have to
+                      guess which direction a card will deploy as. */}
+                  {cardSide && (
+                    <div style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      marginBottom: 12, padding: '3px 9px', borderRadius: 5,
+                      fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700,
+                      textTransform: 'uppercase', letterSpacing: '0.05em',
+                      color: cardSide === 'short' ? 'var(--red)' : 'var(--green)',
+                      background: cardSide === 'short' ? 'rgba(255,77,106,0.1)' : 'rgba(0,214,143,0.1)',
+                      border: `1px solid ${cardSide === 'short' ? 'rgba(255,77,106,0.3)' : 'rgba(0,214,143,0.3)'}`,
+                    }}>
+                      {cardSide === 'short' ? '▼ Short' : '▲ Long'}
+                    </div>
+                  )}
 
                   {[
                     { l: 'Entry', k: 'entryPrice', prefix: '$' },
@@ -657,6 +720,7 @@ export default function CreateStrategy() {
             </button>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 8, textAlign: 'center' }}>
               Using {chosenStrategy === 'user' ? 'your' : "AI's safer"} strategy
+              {' '}({(chosenStrategy === 'user' ? userEdits.side : saferEdits.side) === 'short' ? 'Short' : 'Long'})
             </div>
           </div>
         </div>
