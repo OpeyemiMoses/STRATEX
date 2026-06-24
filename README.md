@@ -122,8 +122,6 @@ PORT=5000
 QWEN_API_KEY=your_qwen_api_key
 QWEN_BASE_URL=your_qwen_base_url
 COINGECKO_API_KEY=your_coingecko_api_key
-
-# Present but unused — real order execution is intentionally not implemented
 BITGET_API_KEY=
 BITGET_SECRET_KEY=
 BITGET_PASSPHRASE=
