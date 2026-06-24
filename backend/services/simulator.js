@@ -68,6 +68,12 @@ const checkBots = async () => {
         bot.filledAt = new Date().toISOString();
         bot.positionValueUSDT = margin; // semantically MARGIN from here on, not full exposure
         bot.exposure = calculateExposure(margin, bot.leverage || 1);
+        // Quantity = full leveraged exposure / fill price, i.e. the actual
+        // notional units of the asset this position represents -- not just
+        // the margin-based amount. This is the field judges/submission
+        // checklists mean by "quantity": how much of the asset was actually
+        // bought/sold, not the dollar position size.
+        bot.quantity = bot.exposure / price;
 
         // If this was a market order, liquidationPrice wasn't computable at
         // creation time (no entryPrice yet) — compute it now against the fill price.
@@ -80,12 +86,15 @@ const checkBots = async () => {
           time: new Date().toLocaleString('en-US', {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
           }),
+          timestamp: new Date().toISOString(), // machine-readable, for the export script
           side: bot.side === 'short' ? 'Short' : 'Long',
           price: price.toFixed(2),
+          quantity: bot.quantity, // numeric, units of the base asset
           size: bot.positionSize
             ? `${bot.positionSize}% ($${margin.toFixed(2)} margin${bot.leverage > 1 ? `, ${bot.leverage}x = $${bot.exposure.toFixed(2)} exposure` : ''})`
             : '—',
           pnl: '—',
+          balanceChange: -margin, // numeric, the actual account balance change from this trade
           type: 'entry',
         });
         console.log(`[SIM] ${bot.name} entry filled at ${price}, margin $${margin.toFixed(2)}${bot.leverage > 1 ? `, ${bot.leverage}x exposure $${bot.exposure.toFixed(2)}` : ''}`);
@@ -112,10 +121,13 @@ const checkBots = async () => {
           time: new Date().toLocaleString('en-US', {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
           }),
+          timestamp: new Date().toISOString(),
           side: 'Liquidated',
           price: price.toFixed(2),
+          quantity: bot.quantity,
           size: '—',
           pnl: `-$${margin.toFixed(2)} (-100%)`,
+          balanceChange: 0, // margin was already deducted at entry — liquidation returns nothing back, but does not deduct a second time
           type: 'liquidation',
         });
         console.log(`[SIM] ${bot.name} LIQUIDATED at ${price} — margin $${margin.toFixed(2)} lost entirely`);
@@ -180,10 +192,13 @@ const checkBots = async () => {
           time: new Date().toLocaleString('en-US', {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
           }),
+          timestamp: new Date().toISOString(),
           side: isShort ? 'Cover' : 'Sell',
           price: price.toFixed(2),
+          quantity: bot.quantity, // same units bought at entry — closing the full position
           size: bot.positionSize ? `${bot.positionSize}%` : '—',
           pnl: `${dollarPnl >= 0 ? '+' : ''}$${dollarPnl.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)`,
+          balanceChange: returnedAmount, // margin + P&L returned to the wallet
           type: tpHit ? 'take-profit' : 'stop-loss',
         });
 

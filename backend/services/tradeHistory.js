@@ -50,6 +50,7 @@ export const archiveBot = (bot) => {
     stopLoss: bot.stopLoss,
     positionSize: bot.positionSize,
     positionValueUSDT: bot.positionValueUSDT,
+    quantity: bot.quantity || null, // units of the base asset -- null for bots archived before this field existed
     // NEW (#3) — leverage context, needed so botAuditor.js can reason about
     // leveraged trades after the fact, and so a liquidation (vs a normal
     // SL hit) is distinguishable in historical records.

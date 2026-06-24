@@ -103,9 +103,15 @@ export default function BotDetail() {
     critical: 'var(--red)',
   };
 
+  // NEW (Section 3) — color helpers for the confidence rating card
+  const ratingColor = { low: 'var(--green)', medium: '#F59E0B', high: 'var(--red)' };
+  const robustnessColor = (score) =>
+    score >= 70 ? 'var(--green)' : score >= 40 ? '#F59E0B' : 'var(--red)';
+
   // Real trade log — USER
   const tradelog = bot.tradelog || [];
   const hasLeverage = bot.leverage && bot.leverage > 1;
+  const cr = bot.confidenceRating; // NEW (Section 3) — may be null/undefined for older bots or failed backtests
 
   return (
     <div style={{ padding: 20 }}>
@@ -254,6 +260,93 @@ export default function BotDetail() {
                 : '// Simulated order — bot is monitoring for entry'}
             </div>
           </div>
+
+          {/* NEW (Section 3) — Confidence Rating: robustness score, risk level,
+              overfitting risk, market adaptability, plain-English explanation.
+              Null-safe: bots created before this feature, or where the
+              backtest had no historical data, simply won't have this. */}
+          {cr ? (
+            <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 14 }}>
+                Confidence Rating
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
+                <div style={{
+                  width: 56, height: 56, borderRadius: '50%',
+                  border: `3px solid ${robustnessColor(cr.robustnessScore)}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, flexShrink: 0,
+                }}>
+                  {cr.robustnessScore}
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+                  Robustness score — % of tested market regimes this strategy was profitable in.
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+                {[
+                  { l: 'Risk Level', v: cr.riskLevel },
+                  { l: 'Overfitting Risk', v: cr.overfittingRisk },
+                  { l: 'Market Adaptability', v: cr.marketAdaptability },
+                ].map(m => (
+                  <div key={m.l}>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                      {m.l}
+                    </div>
+                    <div style={{
+                      fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600,
+                      color: ratingColor[m.v] || 'var(--text)', textTransform: 'capitalize',
+                    }}>
+                      {m.v || '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {cr.explanation && (
+                <div style={{
+                  fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-mid)',
+                  lineHeight: 1.6, padding: '10px 12px', background: 'var(--bg3)', borderRadius: 6,
+                }}>
+                  {cr.explanation}
+                </div>
+              )}
+
+              {cr.regimeResults?.length > 0 && (
+                <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {cr.regimeResults.map((r, i) => {
+                    const profitable = r.metrics.totalReturn > 0;
+                    return (
+                      <div
+                        key={i}
+                        style={{
+                          fontFamily: 'var(--mono)', fontSize: 10,
+                          padding: '4px 9px', borderRadius: 12,
+                          background: profitable ? 'rgba(0,214,143,0.08)' : 'rgba(255,77,106,0.08)',
+                          border: `1px solid ${profitable ? 'rgba(0,214,143,0.25)' : 'rgba(255,77,106,0.25)'}`,
+                          color: profitable ? 'var(--green)' : 'var(--red)',
+                          textTransform: 'capitalize',
+                        }}
+                      >
+                        {r.label.replace('_', ' ')}: {r.metrics.totalReturn >= 0 ? '+' : ''}{r.metrics.totalReturn?.toFixed(1)}%
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                Confidence Rating
+              </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                // Not available — not enough historical data to backtest this pair, or this bot was created before confidence ratings existed.
+              </div>
+            </div>
+          )}
 
           {/* NEW (#4) — Downloadable PnL card trigger. Renders in a Modal, not inline. */}
           {(bot.position === 'open' || bot.position === 'closed') && (

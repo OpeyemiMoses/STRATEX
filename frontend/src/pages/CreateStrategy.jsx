@@ -33,6 +33,8 @@ export default function CreateStrategy() {
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [chatHistory, setChatHistory] = useState([]);
+  // NEW (Section 3) — dismissible soft warning when AI says don't trade this pair right now
+  const [dismissWarning, setDismissWarning] = useState(false);
 
   const addChat = (role, content, type = 'text') => {
     setChatHistory(prev => [...prev, { role, content, type, id: Date.now() + Math.random() }]);
@@ -167,6 +169,7 @@ export default function CreateStrategy() {
       setUserEdits(data.analysis.userStrategy);
       setSaferEdits(data.analysis.saferStrategy);
       setEditingStrategy(null);
+      setDismissWarning(false); // reset so a fresh analysis always shows the warning if applicable
       setStep(STEPS.REVIEW);
     } catch (err) {
       setError('Failed to analyse strategy. Please try again.');
@@ -203,10 +206,19 @@ export default function CreateStrategy() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(botPayload),
       });
-      if (!res.ok) throw new Error('Failed');
-      navigate('/bots');
+      if (!res.ok) {
+        // NEW — surface the server's actual error (e.g. the mandatory
+        // risk-layer 400 from Section 3) instead of a generic message
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to create bot. Please try again.');
+      }
+      const newBot = await res.json();
+      // NEW — go straight to the bot's detail page so the confidence
+      // rating (robustness score, risk/overfitting/adaptability) is
+      // visible immediately instead of landing back on the bots list
+      navigate(`/bot/${newBot.id}`);
     } catch (err) {
-      setError('Failed to create bot. Please try again.');
+      setError(err.message || 'Failed to create bot. Please try again.');
       setStep(STEPS.REVIEW);
     }
   };
@@ -415,7 +427,7 @@ export default function CreateStrategy() {
       {step === STEPS.REVIEW && analysis && (
         <div>
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20,
+            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
             padding: '12px 16px', background: 'var(--bg2)',
             border: `1px solid ${riskColor[analysis.riskLevel] || 'var(--border)'}`,
             borderRadius: 8,
@@ -428,6 +440,66 @@ export default function CreateStrategy() {
               · {analysis.riskReasons?.[0]}
             </span>
           </div>
+
+          {/* NEW (Section 3) — current market-state strip for this pair */}
+          {analysis.marketState && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+              padding: '10px 16px', background: 'var(--bg2)',
+              border: '1px solid var(--border)', borderRadius: 8,
+              fontFamily: 'var(--mono)', fontSize: 11, flexWrap: 'wrap',
+            }}>
+              <span style={{ color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: 10 }}>
+                Market Now
+              </span>
+              <span style={{ color: 'var(--blue)' }}>{analysis.marketState.regimeDisplay}</span>
+              <span style={{ color: 'var(--text-dim)' }}>·</span>
+              <span style={{ color: 'var(--text-mid)' }}>
+                {analysis.marketState.stats.netChangePercent >= 0 ? '+' : ''}{analysis.marketState.stats.netChangePercent}% (48h)
+              </span>
+              <span style={{ color: 'var(--text-dim)' }}>·</span>
+              <span style={{ color: 'var(--text-mid)' }}>
+                {analysis.marketState.stats.annualizedVolPercent}% ann. vol
+              </span>
+              {analysis.marketState.liquidityFlag === 'low' && (
+                <span style={{ color: '#F59E0B' }}>· ⚠ Low liquidity</span>
+              )}
+            </div>
+          )}
+
+          {/* NEW (Section 3) — soft "AI recommends waiting" warning. Informational
+              only: does NOT block bot creation, per explicit product decision.
+              Dismissible so it doesn't nag once seen. */}
+          {analysis.shouldTradeNow === false && !dismissWarning && (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 20,
+              padding: '12px 16px', background: 'rgba(245,158,11,0.06)',
+              border: '1px solid rgba(245,158,11,0.3)', borderRadius: 8,
+            }}>
+              <span style={{ fontSize: 14, lineHeight: '1.4' }}>⚠</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#F59E0B', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                  AI recommends waiting
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)', lineHeight: 1.6 }}>
+                  {analysis.shouldTradeNowReason || analysis.fitAssessment?.reason}
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 6 }}>
+                  You can still deploy this bot if you'd like to proceed anyway.
+                </div>
+              </div>
+              <button
+                onClick={() => setDismissWarning(true)}
+                style={{
+                  background: 'none', border: 'none', color: 'var(--text-dim)',
+                  cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1,
+                }}
+                aria-label="Dismiss warning"
+              >
+                ✕
+              </button>
+            </div>
+          )}
 
           <div className="strategy-comparison-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
             {['user', 'safer'].map(type => {
