@@ -27,8 +27,8 @@ function AnimatedPage({ children }) {
     const el = ref.current;
     if (!el) return;
     el.style.opacity = '0';
-    el.style.transform = 'translateY(20px)';
-    el.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+    el.style.transform = 'translateY(48px)';
+    el.style.transition = 'opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1), transform 0.55s cubic-bezier(0.22, 1, 0.36, 1)';
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         el.style.opacity = '1';
@@ -55,10 +55,10 @@ function AnimatedPage({ children }) {
       { threshold: 0.1 }
     );
 
-    cards.forEach(card => {
+    cards.forEach((card, i) => {
       card.style.opacity = '0';
-      card.style.transform = 'translateY(24px)';
-      card.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+      card.style.transform = 'translateY(40px)';
+      card.style.transition = `opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1) ${i % 6 * 0.06}s, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1) ${i % 6 * 0.06}s`;
       observer.observe(card);
     });
 

@@ -1,4 +1,4 @@
-import { useRef, useState, useLayoutEffect } from 'react';
+import { useRef, useState, useLayoutEffect, useEffect } from 'react';
 import html2canvas from 'html2canvas';
 import stratexWordmark from '../assets/stratex.png';
 import stratexBotLogo from '../assets/stratex-logo.png';
@@ -30,20 +30,51 @@ export default function PnLCard({ bot, isClosed = false }) {
     return () => window.removeEventListener('resize', updateScale);
   }, []);
 
+  // FIXED: real route is GET /api/signals/ticker/:symbol (path param, not
+  // query string), and it returns { price: '...' } as a string -- '0' on any
+  // backend-side failure, never null/undefined. The old data.price ?? data.lastPr
+  // fallback would silently accept that '0' string as a valid price instead of
+  // treating it as "unavailable", which is the root cause of the current price
+  // never showing correctly.
   const fetchLivePrice = async () => {
     try {
-      const res = await fetch(`${API}/api/signals/ticker?symbol=${bot.asset}`);
+      const res = await fetch(`${API}/api/signals/ticker/${bot.asset}`);
       const data = await res.json();
-      return data.price ?? data.lastPr ?? null;
+      const price = parseFloat(data.price);
+      return price && !isNaN(price) ? price : null;
     } catch (err) {
       console.error('Failed to fetch live price for PnL card:', err.message);
       return null;
     }
   };
 
-  // Leverage-correct P&L calculation — mirrors calculateLeveragedPnl in leverage.js
-  // pnlPercent reflects the leveraged return on margin (e.g. 1% move × 10x = 10%)
-  // dollarPnl is calculated against exposure (margin × leverage), not just margin
+  // Fetch the live price as soon as the card mounts (i.e. as soon as the
+  // modal opens), not only when the download button is clicked -- otherwise
+  // the on-screen preview never shows "Current" since handleDownload fires
+  // the fetch and then immediately captures/downloads, giving no real chance
+  // to see it update on screen. Also refresh periodically while open so the
+  // preview doesn't go stale if the user leaves the modal open a while.
+  useEffect(() => {
+    if (isClosed) return; // closed trades use stored final values, no live fetch needed
+    let cancelled = false;
+
+    const refresh = async () => {
+      const price = await fetchLivePrice();
+      if (!cancelled) setLivePrice(price);
+    };
+
+    refresh();
+    const interval = setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isClosed, bot.asset]);
+
+
+  // Leverage-correct P&L calculation -- mirrors calculateLeveragedPnl in leverage.js
+  // pnlPercent is the raw price move (leverage is NOT applied to the %)
+  // dollarPnl is calculated against exposure (margin x leverage), not just margin
   const computeLivePnl = (price) => {
     const entry = bot.filledEntry;
     if (!price || !entry) {
@@ -63,8 +94,8 @@ export default function PnLCard({ bot, isClosed = false }) {
       ? ((entry - price) / entry) * 100
       : ((price - entry) / entry) * 100;
 
-    // Leveraged % shown to user (what a real exchange would show)
-    const pnlPercent = rawMovePercent * leverage;
+    // Percent shown to user = raw price move, leverage not applied
+    const pnlPercent = rawMovePercent;
 
     // Dollar P&L against full exposure
     const pnl = exposure * (rawMovePercent / 100);
@@ -178,7 +209,7 @@ export default function PnLCard({ bot, isClosed = false }) {
             position: 'absolute', left: '48px', top: '140px',
             maxWidth: '560px', zIndex: 2,
           }}>
-            {/* Asset · Side · Leverage */}
+            {/* Asset . Side . Leverage */}
             <div style={{
               fontSize: '46px', fontWeight: 700, color: '#fff',
               display: 'flex', alignItems: 'baseline', gap: '14px',
@@ -211,14 +242,10 @@ export default function PnLCard({ bot, isClosed = false }) {
               {isProfit ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
             </div>
 
-            {/* Percentage — leveraged */}
+            {/* Percentage -- raw price move, not leverage-amplified.
+                Leverage is already shown via the badge next to LONG/SHORT above. */}
             <div style={{ fontSize: '30px', fontWeight: 700, color: pnlColor }}>
               {isProfit ? '+' : ''}{Number(pnlPercent).toFixed(3)}%
-              {hasLeverage && (
-                <span style={{ fontSize: '16px', color: '#8b949e', marginLeft: '12px', fontWeight: 400 }}>
-                  ({bot.leverage}x leverage)
-                </span>
-              )}
             </div>
           </div>
 

@@ -40,9 +40,17 @@ export default function DecisionConsole() {
   const panelRef = useRef(null);
   const buttonRef = useRef(null);
 
-  // Hide on landing page or when not connected
+  // Hide on landing page or when not connected -- computed here, but NOT
+  // used to bail out early. The actual "don't render anything" decision
+  // happens at the very end, after every hook below has already run. Every
+  // hook must execute on every render, in the same order, no matter what --
+  // an early `return null` placed before a hook call is what caused
+  // "Rendered more hooks than during the previous render": on a landing-page
+  // render this component would stop before ever reaching the two
+  // useEffect calls further down, so React saw a different hook count than
+  // on a render where isConnected was true.
   const isLanding = location.pathname === '/';
-  if (isLanding || !isConnected) return null;
+  const shouldRender = !isLanding && isConnected;
 
   const fetchEntries = async () => {
     if (!address) return;
@@ -50,7 +58,6 @@ export default function DecisionConsole() {
     try {
       const tab = TABS.find(t => t.key === activeTab);
       const typeParam = tab?.types ? `&type=${tab.types[0]}` : '';
-      // Wallet-scoped: only fetch entries for the connected wallet
       const res = await fetch(`${API}/api/decisions/recent?limit=100&wallet=${address}${typeParam}`);
       const data = await res.json();
       setEntries(data);
@@ -71,15 +78,19 @@ export default function DecisionConsole() {
     }
   };
 
+  // Polling effect -- now guarded INSIDE the effect body instead of skipping
+  // the hook call itself. The hook always runs; it just may choose to do
+  // nothing when shouldRender is false.
   useEffect(() => {
+    if (!shouldRender) return;
     fetchEntries();
     const interval = setInterval(fetchEntries, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [activeTab, address]);
+  }, [activeTab, address, shouldRender]);
 
-  // Close on outside click
+  // Close on outside click -- same pattern, guard inside the effect body.
   useEffect(() => {
-    if (!isOpen) return;
+    if (!shouldRender || !isOpen) return;
     const handleOutsideClick = (e) => {
       if (
         panelRef.current && !panelRef.current.contains(e.target) &&
@@ -94,7 +105,7 @@ export default function DecisionConsole() {
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('touchstart', handleOutsideClick);
     };
-  }, [isOpen]);
+  }, [shouldRender, isOpen]);
 
   const handleOpen = () => {
     setIsOpen(true);
@@ -112,6 +123,11 @@ export default function DecisionConsole() {
       console.error('Failed to clear decision log:', err.message);
     }
   };
+
+  // The ONLY place we bail out of rendering JSX -- placed after every hook
+  // above has already run unconditionally, so the hook count is identical
+  // on every render regardless of route or connection state.
+  if (!shouldRender) return null;
 
   return (
     <>
@@ -136,7 +152,6 @@ export default function DecisionConsole() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          position: 'fixed',
         }}
         className="decision-console-toggle"
         aria-label="Toggle decision console"

@@ -26,7 +26,9 @@ export default function CreateStrategy() {
   const [analysis, setAnalysis] = useState(null);
   const [chosenStrategy, setChosenStrategy] = useState(null);
   const [editingStrategy, setEditingStrategy] = useState(null);
-  const [editValues, setEditValues] = useState({});
+  // FIX: per-card edits stored separately so switching cards never wipes edits
+  const [userEdits, setUserEdits] = useState({});   // edits for the 'user' card
+  const [saferEdits, setSaferEdits] = useState({}); // edits for the 'safer' card
   const [botName, setBotName] = useState('');
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -35,6 +37,10 @@ export default function CreateStrategy() {
   const addChat = (role, content, type = 'text') => {
     setChatHistory(prev => [...prev, { role, content, type, id: Date.now() + Math.random() }]);
   };
+
+  // Helper: get the edits object for a given card type
+  const getEdits = (type) => type === 'user' ? userEdits : saferEdits;
+  const setEdits = (type, vals) => type === 'user' ? setUserEdits(vals) : setSaferEdits(vals);
 
   const handleParse = async () => {
     if (!strategyText.trim()) return;
@@ -156,9 +162,10 @@ export default function CreateStrategy() {
       const data = await res.json();
       setAnalysis(data.analysis);
       setChosenStrategy('safer');
-      // FIX: initialise editValues to safer strategy but DON'T set editingStrategy
-      // so the user starts in read mode, not edit mode
-      setEditValues(data.analysis.saferStrategy);
+      // Seed each card's edits from the original AI values — never touched again
+      // by card clicks or selection changes
+      setUserEdits(data.analysis.userStrategy);
+      setSaferEdits(data.analysis.saferStrategy);
       setEditingStrategy(null);
       setStep(STEPS.REVIEW);
     } catch (err) {
@@ -171,13 +178,9 @@ export default function CreateStrategy() {
     if (!botName.trim()) { setError('Please give your bot a name.'); return; }
     setStep(STEPS.CREATING);
 
-    // FIX: if user was editing, use editValues; otherwise use the chosen strategy as-is
-    // editValues is only used when editingStrategy matches chosenStrategy
-    const strategy = editingStrategy === chosenStrategy
-      ? editValues
-      : chosenStrategy === 'user'
-      ? analysis.userStrategy
-      : analysis.saferStrategy;
+    // Always use the per-card edits — they start as the original AI values
+    // and accumulate user changes independently per card
+    const strategy = chosenStrategy === 'user' ? userEdits : saferEdits;
 
     const botPayload = {
       name: botName,
@@ -191,7 +194,7 @@ export default function CreateStrategy() {
       stopLoss: strategy.stopLossPrice,
       positionSize: strategy.positionSizePercent,
       walletAddress: address,
-      leverage: strategy.leverage ?? parsed.leverage ?? 1,
+      leverage: parseFloat(strategy.leverage ?? parsed.leverage ?? 1) || 1,
     };
 
     try {
@@ -260,7 +263,7 @@ export default function CreateStrategy() {
                 value={strategyText}
                 onChange={e => setStrategyText(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) handleParse(); }}
-                placeholder={`e.g. "Buy BTC at $60k with 10% of my portfolio and sell at $61k"\ne.g. "Short ETH when RSI hits 80, use 5% of portfolio, stop loss at 5%"\ne.g. "Buy SOL now with 5x leverage and sell half at $200, rest at $220"`}
+                placeholder={`e.g. "Buy BTC at $60k with 10% of my portfolio and sell at $61k"\ne.g. "Short ETH when RSI hits 80, use 5% of portfolio, stop loss at 5%"\n`}
                 style={{
                   width: '100%', minHeight: 120, background: '#060A10',
                   border: '1px solid var(--border)', borderRadius: 6,
@@ -431,22 +434,12 @@ export default function CreateStrategy() {
               const s = type === 'user' ? analysis.userStrategy : analysis.saferStrategy;
               const isChosen = chosenStrategy === type;
               const isEditing = editingStrategy === type;
-
-              // FIX: clicking the card only switches which is chosen — it does NOT
-              // reset editValues if this card is already being edited
-              const handleCardClick = () => {
-                setChosenStrategy(type);
-                // Only reset editValues if we're switching TO this card and weren't already editing it
-                if (editingStrategy !== type) {
-                  setEditingStrategy(null);
-                  setEditValues(s);
-                }
-              };
+              const edits = getEdits(type);
 
               return (
                 <div
                   key={type}
-                  onClick={handleCardClick}
+                  onClick={() => setChosenStrategy(type)}
                   style={{
                     background: 'var(--bg2)',
                     border: `1px solid ${isChosen ? 'var(--blue)' : 'var(--border)'}`,
@@ -490,8 +483,8 @@ export default function CreateStrategy() {
                       </span>
                       {isEditing && !field.raw ? (
                         <input
-                          value={editValues[field.k] ?? ''}
-                          onChange={e => setEditValues(prev => ({ ...prev, [field.k]: e.target.value }))}
+                          value={edits[field.k] ?? ''}
+                          onChange={e => setEdits(type, { ...edits, [field.k]: e.target.value })}
                           onClick={e => e.stopPropagation()}
                           style={{
                             background: 'var(--bg3)', border: '1px solid var(--blue)',
@@ -502,8 +495,8 @@ export default function CreateStrategy() {
                       ) : (
                         <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', fontWeight: 500 }}>
                           {field.raw
-                            ? (isEditing ? (editValues[field.k] ?? s[field.k]) : s[field.k])
-                            : `${field.prefix || ''}${isEditing ? (editValues[field.k] ?? s[field.k]) : s[field.k]}${field.suffix || ''}`}
+                            ? (edits[field.k] ?? s[field.k])
+                            : `${field.prefix || ''}${edits[field.k] ?? s[field.k]}${field.suffix || ''}`}
                         </span>
                       )}
                     </div>
@@ -517,13 +510,7 @@ export default function CreateStrategy() {
                     onClick={e => {
                       e.stopPropagation();
                       setChosenStrategy(type);
-                      if (isEditing) {
-                        setEditingStrategy(null);
-                      } else {
-                        setEditingStrategy(type);
-                        // Only seed editValues from s if not already editing this card
-                        if (editingStrategy !== type) setEditValues(s);
-                      }
+                      setEditingStrategy(isEditing ? null : type);
                     }}
                     style={{
                       marginTop: 12, background: 'none',
@@ -598,7 +585,6 @@ export default function CreateStrategy() {
             </button>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 8, textAlign: 'center' }}>
               Using {chosenStrategy === 'user' ? 'your' : "AI's safer"} strategy
-              {editingStrategy === chosenStrategy ? ' (with your edits)' : ''}
             </div>
           </div>
         </div>

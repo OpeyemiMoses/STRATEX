@@ -29,13 +29,11 @@ const qwen = async (messages, systemPrompt) => {
 };
 
 // POST /api/strategy/parse
-// First pass: parse natural language into structured fields, identify what's missing
 router.post('/parse', async (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: 'No strategy text provided' });
 
   try {
-    // First pass: ask Qwen to identify just the asset, fast and cheap
     const assetSystem = `Identify the crypto asset mentioned in this trading strategy text. Return ONLY the Bitget-style trading pair symbol (e.g. BTCUSDT, ETHUSDT, SOLUSDT, DOGEUSDT, MNTUSDT). No explanation, no markdown, just the symbol.`;
     const assetRaw = await qwen([{ role: 'user', content: text }], assetSystem);
     const detectedAsset = assetRaw.trim().toUpperCase().replace(/[^A-Z]/g, '');
@@ -46,9 +44,7 @@ router.post('/parse', async (req, res) => {
     try {
       const priceRes = await axios.get(`https://api.bitget.com/api/v2/spot/market/tickers?symbol=${assetGuess}`);
       livePrice = parseFloat(priceRes.data?.data?.[0]?.lastPr);
-      if (!livePrice || isNaN(livePrice)) {
-        assetUnavailable = true;
-      }
+      if (!livePrice || isNaN(livePrice)) assetUnavailable = true;
       console.log(`[LIVE PRICE DEBUG] assetGuess=${assetGuess}, livePrice=${livePrice}`);
     } catch (e) {
       assetUnavailable = true;
@@ -63,9 +59,9 @@ router.post('/parse', async (req, res) => {
     }
 
     const system = `You are a trading strategy parser for a crypto trading bot platform.
-${livePrice ? `The current live market price of ${assetGuess} is $${livePrice}. Use this as ground truth for any "current price" or "buy now" type entries.` : `No live price was available for ${assetGuess} — if this asset isn't tradeable on Bitget, mention that in the summary.`}
+${livePrice ? `The current live market price of ${assetGuess} is $${livePrice}. Use this as ground truth for any "current price" or "buy now" type entries.` : ''}
 
-You MUST return a JSON object with EXACTLY these field names, no others, no renaming:
+You MUST return a JSON object with EXACTLY these field names:
 {
   "asset": "BTCUSDT",
   "action": "buy",
@@ -85,23 +81,18 @@ You MUST return a JSON object with EXACTLY these field names, no others, no rena
 }
 
 Rules:
-- Field names must match exactly as shown above. Do NOT use "symbol", "entry", "take_profit", "stop_loss", "direction", or any other naming.
-- "entryType" must be "market" if the user wants to buy/sell immediately at current price (e.g. "buy now", "buy at current price", no specific price mentioned), or "limit" if the user specified a target price to wait for (e.g. "buy at $60k", "buy when it drops to $65").
-- "asset" must be a Bitget-style symbol like BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT.
-- "leverage" must be a number, 1 to 125. Extract it ONLY if the user explicitly mentions leverage (e.g. "5x leverage", "10x", "with 3x leverage on this trade") — do NOT infer leverage from context, only from explicit mention. If the user did not mention leverage, set this to null (not 1) — the user will be asked directly. If the extracted leverage is above 20, mention in the summary that this is a high-risk leverage level.
-- "missing" is an array of field names (from the list above) that the user did not specify and are needed: entryPrice or entryCondition, takeProfitPrice or takeProfitPercent, stopLossPrice or stopLossPercent, positionSizePercent or positionSizeUSDT.
-- ALWAYS add "leverage" to "missing" UNLESS the user explicitly mentioned a leverage number in their text. This means leverage is now a required clarifying question for every strategy that didn't explicitly state it, same as stop loss.
-- If stop loss wasn't mentioned, add "stopLossPrice" to "missing" — do not invent one.
-- Return ONLY the JSON object. No markdown fences, no preamble, no explanation. Your response must start with { and end with }.`;
+- "action" must be "buy" for long positions and "sell" for short positions.
+- "entryType" must be "market" if the user wants to trade immediately, or "limit" if they specified a target price.
+- "leverage" must be a number 1-125. Set to null if not explicitly mentioned — it will be asked.
+- ALWAYS add "leverage" to "missing" UNLESS the user explicitly mentioned a leverage number.
+- If stop loss wasn't mentioned, add "stopLossPrice" to "missing".
+- Return ONLY the JSON object. No markdown, no preamble.`;
 
     const raw = await qwen([{ role: 'user', content: text }], system);
     let clean = raw.replace(/```json|```/g, '').trim();
-    // Strip any preamble text before the first { and after the last }
     const firstBrace = clean.indexOf('{');
     const lastBrace = clean.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1) {
-      clean = clean.slice(firstBrace, lastBrace + 1);
-    }
+    if (firstBrace !== -1 && lastBrace !== -1) clean = clean.slice(firstBrace, lastBrace + 1);
     const parsed = JSON.parse(clean);
     parsed.livePrice = livePrice || null;
     console.log('[PARSE DEBUG]', JSON.stringify(parsed));
@@ -113,33 +104,54 @@ Rules:
 });
 
 // POST /api/strategy/clarify
-// Get the next clarifying question for a missing field
+// FIX: short trades get reversed TP/SL directions in questions and options
 router.post('/clarify', async (req, res) => {
   const { missingField, strategyContext } = req.body;
+  const isShort = strategyContext?.action === 'sell';
 
   const questionMap = {
     'entryPrice': {
-      question: 'At what price do you want to enter this trade?',
-      options: ['Current market price', 'Set a specific price', 'When RSI drops below 30', 'When price breaks above resistance'],
+      question: isShort
+        ? 'At what price do you want to enter this short trade?'
+        : 'At what price do you want to enter this trade?',
+      options: ['Current market price', 'Set a specific price', 'When RSI hits 70', 'When price breaks below support'],
     },
     'entryCondition': {
-      question: 'What condition should trigger your entry?',
-      options: ['Buy at current price now', 'Wait for a price dip', 'Wait for RSI oversold signal', 'Wait for MACD crossover'],
+      question: isShort
+        ? 'What condition should trigger your short entry?'
+        : 'What condition should trigger your entry?',
+      options: isShort
+        ? ['Sell at current price now', 'Wait for a price rally to short', 'Wait for RSI overbought signal', 'Wait for MACD bearish crossover']
+        : ['Buy at current price now', 'Wait for a price dip', 'Wait for RSI oversold signal', 'Wait for MACD crossover'],
     },
     'takeProfitPrice': {
-      question: 'At what price or % gain do you want to take profit?',
-      options: ['2% above entry', '5% above entry', '10% above entry', 'Set a specific price'],
+      // For shorts: TP is BELOW entry (price needs to fall to profit)
+      question: isShort
+        ? 'At what price or % drop do you want to take profit? (price must fall below entry for a short to profit)'
+        : 'At what price or % gain do you want to take profit?',
+      options: isShort
+        ? ['2% below entry', '5% below entry', '10% below entry', 'Set a specific price']
+        : ['2% above entry', '5% above entry', '10% above entry', 'Set a specific price'],
     },
     'takeProfitPercent': {
-      question: 'What % gain should trigger your take profit?',
+      question: isShort
+        ? 'What % price drop should trigger your take profit?'
+        : 'What % gain should trigger your take profit?',
       options: ['2%', '5%', '10%', '20%'],
     },
     'stopLossPrice': {
-      question: 'At what price or % loss should the bot cut the position?',
-      options: ['1% below entry', '2% below entry', '5% below entry', 'Set a specific price'],
+      // For shorts: SL is ABOVE entry (price rising against you)
+      question: isShort
+        ? 'At what price or % rise should the bot cut the short position? (price rising above entry is a loss on a short)'
+        : 'At what price or % loss should the bot cut the position?',
+      options: isShort
+        ? ['1% above entry', '2% above entry', '5% above entry', 'Set a specific price']
+        : ['1% below entry', '2% below entry', '5% below entry', 'Set a specific price'],
     },
     'stopLossPercent': {
-      question: 'What % loss should trigger your stop loss?',
+      question: isShort
+        ? 'What % price rise against your short should trigger the stop loss?'
+        : 'What % loss should trigger your stop loss?',
       options: ['1%', '2%', '5%', '10%'],
     },
     'positionSizePercent': {
@@ -169,21 +181,22 @@ router.post('/clarify', async (req, res) => {
 });
 
 // POST /api/strategy/analyse
-// Full risk analysis + safer version suggestion
 router.post('/analyse', async (req, res) => {
   const { parsed } = req.body;
 
   try {
-    const system = `You are a professional crypto trading risk analyst. 
+    const system = `You are a professional crypto trading risk analyst.
 A user has described a trading strategy and you must:
 1. Analyse the risk of their strategy
 2. Suggest a safer version with improved risk/reward
 3. Explain your reasoning clearly but concisely
 
-If the strategy includes leverage above 1x, factor that into your risk assessment — higher leverage
-means a smaller adverse price move can wipe out the position (liquidation risk), so the "safer"
-version should generally recommend lower leverage when the user's leverage is aggressive (above ~10x),
-and should explicitly mention liquidation risk in riskReasons when leverage is a meaningful risk factor.
+CRITICAL DIRECTION RULES:
+- For SHORT trades (action: "sell"): take profit price MUST be BELOW entry price, stop loss MUST be ABOVE entry price.
+- For LONG trades (action: "buy"): take profit price MUST be ABOVE entry price, stop loss MUST be BELOW entry price.
+- Never reverse these. A short profits when price falls.
+
+If the strategy includes leverage above 1x, factor that into your risk assessment.
 
 Return ONLY valid JSON, no markdown:
 {
@@ -224,7 +237,7 @@ Return ONLY valid JSON, no markdown:
   }
 });
 
-// POST /api/strategy/analyze (existing — bot verdict for backtest modal)
+// POST /api/strategy/analyze (bot verdict for backtest modal)
 router.post('/analyze', async (req, res) => {
   const { bot, backtestResults } = req.body;
   try {

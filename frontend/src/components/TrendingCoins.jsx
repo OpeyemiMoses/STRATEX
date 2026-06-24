@@ -33,7 +33,7 @@ export default function TrendingCoins() {
           textTransform: 'uppercase',
           letterSpacing: '0.08em',
         }}>
-          CoinGecko Top Searches
+          Top Searches
         </span>
       </div>
 

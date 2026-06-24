@@ -1,13 +1,22 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import PnLChart from './PnLChart.jsx';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+const REGIME_BADGE_COLOR = {
+  bull: 'var(--green)',
+  bear: 'var(--red)',
+  sideways: 'var(--text-dim)',
+  high_volatility: '#F59E0B',
+  unknown: 'var(--text-dim)',
+};
 
 export default function BacktestModal({ bot, onClose }) {
   const [results, setResults] = useState(null);
   const [analysis, setAnalysis] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [expandedRegime, setExpandedRegime] = useState(null);
 
   useEffect(() => {
     if (bot) runAnalysis();
@@ -23,7 +32,13 @@ export default function BacktestModal({ bot, onClose }) {
     setLoading(true);
     setResults(null);
     setAnalysis('');
+    setError('');
     try {
+      // FIXED: the old request was missing side, entryType, entryPrice, and
+      // leverage -- the real backtest engine needs all of these to replay
+      // the strategy correctly. Without them it would silently default to
+      // long/market/1x regardless of how this bot was actually configured,
+      // producing results that don't match the bot's real behavior.
       const btRes = await fetch(`${API}/api/backtest/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -31,12 +46,21 @@ export default function BacktestModal({ bot, onClose }) {
           strategy: bot.strategy,
           asset: bot.asset,
           timeframe: bot.timeframe,
+          side: bot.side,
+          entryType: bot.entryType,
+          entryPrice: bot.entryPrice,
           stopLoss: bot.stopLoss,
           takeProfit: bot.takeProfit,
           positionSize: bot.positionSize,
+          leverage: bot.leverage,
         }),
       });
       const btData = await btRes.json();
+
+      if (!btRes.ok) {
+        setError(btData.error || 'Backtest failed.');
+        return;
+      }
       setResults(btData);
 
       const analysisRes = await fetch(`${API}/api/strategy/analyze`, {
@@ -48,13 +72,14 @@ export default function BacktestModal({ bot, onClose }) {
       setAnalysis(analysisData.analysis || '');
     } catch (err) {
       console.error('Backtest modal error:', err);
+      setError('Backtest failed. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
   return createPortal(
-   <div style={{
+    <div style={{
       position: 'fixed',
       inset: 0,
       zIndex: 1000,
@@ -77,7 +102,7 @@ export default function BacktestModal({ bot, onClose }) {
       />
 
       {/* Modal - centered, scrollable */}
-<div style={{
+      <div style={{
         position: 'relative',
         width: '100%',
         maxWidth: 860,
@@ -96,7 +121,7 @@ export default function BacktestModal({ bot, onClose }) {
           <div>
             <div style={{ fontWeight: 600, fontSize: 15 }}>{bot.name}</div>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
-              {bot.asset} · {bot.timeframe} · Live Backtest Analysis
+              {bot.asset} · {bot.timeframe} · Multi-Regime Backtest
             </div>
           </div>
           <button
@@ -131,11 +156,21 @@ export default function BacktestModal({ bot, onClose }) {
               animation: 'spin 0.8s linear infinite',
               margin: '0 auto 16px',
             }} />
-            // Running analysis on {bot.asset}...
+            // Replaying strategy against real historical data for {bot.asset}...
+          </div>
+        ) : error ? (
+          <div style={{
+            padding: '40px',
+            textAlign: 'center',
+            fontFamily: 'var(--mono)',
+            fontSize: 13,
+            color: 'var(--red)',
+          }}>
+            {error}
           </div>
         ) : (
           <>
-            {/* Metrics Grid */}
+            {/* Aggregate Metrics Grid */}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
@@ -143,12 +178,12 @@ export default function BacktestModal({ bot, onClose }) {
               marginBottom: 16,
             }}>
               {[
-                { l: 'Total Return', v: `${results?.metrics?.totalReturn >= 0 ? '+' : ''}${results?.metrics?.totalReturn}%`, c: results?.metrics?.totalReturn >= 0 ? 'var(--green)' : 'var(--red)' },
-                { l: 'Win Rate', v: `${results?.metrics?.winRate}%`, c: 'var(--green)' },
-                { l: 'Sharpe Ratio', v: results?.metrics?.sharpeRatio, c: 'var(--text)' },
-                { l: 'Max Drawdown', v: `${results?.metrics?.maxDrawdown}%`, c: 'var(--red)' },
-                { l: 'Total Trades', v: results?.metrics?.totalTrades, c: 'var(--text)' },
-                { l: 'Profit Factor', v: results?.metrics?.profitFactor, c: 'var(--green)' },
+                { l: 'Total Return', v: `${results?.aggregateMetrics?.totalReturn >= 0 ? '+' : ''}${results?.aggregateMetrics?.totalReturn}%`, c: results?.aggregateMetrics?.totalReturn >= 0 ? 'var(--green)' : 'var(--red)' },
+                { l: 'Win Rate', v: `${results?.aggregateMetrics?.winRate}%`, c: 'var(--green)' },
+                { l: 'Sharpe Ratio', v: results?.aggregateMetrics?.sharpeRatio, c: 'var(--text)' },
+                { l: 'Max Drawdown', v: `${results?.aggregateMetrics?.maxDrawdown}%`, c: 'var(--red)' },
+                { l: 'Total Trades', v: results?.aggregateMetrics?.totalTrades, c: 'var(--text)' },
+                { l: 'Profit Factor', v: results?.aggregateMetrics?.profitFactor ?? '—', c: 'var(--green)' },
               ].map(m => (
                 <div key={m.l} style={{
                   background: 'var(--bg2)',
@@ -162,9 +197,110 @@ export default function BacktestModal({ bot, onClose }) {
               ))}
             </div>
 
-            {/* PnL Chart */}
+            {/* Robustness Score + Verdict — the actual point of multi-regime testing */}
+            <div style={{
+              background: 'var(--bg2)',
+              border: `1px solid ${results?.robustnessScore >= 60 ? 'rgba(0,214,143,0.25)' : 'rgba(255,77,106,0.25)'}`,
+              borderRadius: 8,
+              padding: 16,
+              marginBottom: 16,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  Robustness Score
+                </span>
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 20, fontWeight: 700,
+                  color: results?.robustnessScore >= 60 ? 'var(--green)' : results?.robustnessScore >= 30 ? '#F59E0B' : 'var(--red)',
+                }}>
+                  {results?.robustnessScore}/100
+                </span>
+              </div>
+              <p style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)', lineHeight: 1.7, margin: 0 }}>
+                {results?.verdict}
+              </p>
+            </div>
+
+            {/* Per-Regime Breakdown */}
             <div style={{ marginBottom: 16 }}>
-              <PnLChart data={results?.chartData} height={130} />
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                Performance by Market Regime
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {results?.regimes?.map((regime, i) => {
+                  const isExpanded = expandedRegime === i;
+                  const isProfit = regime.metrics.totalReturn >= 0;
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        background: 'var(--bg2)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        onClick={() => setExpandedRegime(isExpanded ? null : i)}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '10px 14px', cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{
+                            fontFamily: 'var(--mono)', fontSize: 10,
+                            color: REGIME_BADGE_COLOR[regime.label] || 'var(--text-dim)',
+                            border: `1px solid ${REGIME_BADGE_COLOR[regime.label] || 'var(--border)'}`,
+                            borderRadius: 4, padding: '2px 8px', textTransform: 'uppercase',
+                          }}>
+                            {regime.labelDisplay}
+                          </span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                            {regime.metrics.totalTrades} trade{regime.metrics.totalTrades !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <span style={{
+                            fontFamily: 'var(--mono)', fontSize: 13, fontWeight: 600,
+                            color: isProfit ? 'var(--green)' : 'var(--red)',
+                          }}>
+                            {isProfit ? '+' : ''}{regime.metrics.totalReturn}%
+                          </span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+                            {isExpanded ? '▲' : '▼'}
+                          </span>
+                        </div>
+                      </div>
+                      {isExpanded && (
+                        <div style={{ padding: '0 14px 14px', borderTop: '1px solid var(--border)' }}>
+                          <div style={{
+                            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))',
+                            gap: 8, marginTop: 10, marginBottom: 10,
+                          }}>
+                            {[
+                              { l: 'Win Rate', v: `${regime.metrics.winRate}%` },
+                              { l: 'Max DD', v: `${regime.metrics.maxDrawdown}%` },
+                              { l: 'Sharpe', v: regime.metrics.sharpeRatio },
+                              { l: 'Profit Factor', v: regime.metrics.profitFactor ?? '—' },
+                            ].map(m => (
+                              <div key={m.l}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--text-dim)' }}>{m.l}</div>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)' }}>{m.v}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {regime.regimeStats && (
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>
+                              Price move: {regime.regimeStats.netChangePercent?.toFixed(1)}% · Annualized vol: {regime.regimeStats.annualizedVolPercent?.toFixed(0)}%
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Qwen Analysis */}

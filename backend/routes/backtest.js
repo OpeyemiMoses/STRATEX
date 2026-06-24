@@ -1,70 +1,121 @@
 import express from 'express';
-import axios from 'axios';
-import dotenv from 'dotenv';
-import crypto from 'crypto';
-
-dotenv.config();
+import { getRegimeSegments } from '../services/marketRegime.js';
+import { replayStrategyOnCandles, computeMetrics } from '../services/backtestEngine.js';
 
 const router = express.Router();
 
-const sign = (timestamp, method, path, body = '') => {
-  const message = timestamp + method + path + body;
-  return crypto
-    .createHmac('sha256', process.env.BITGET_SECRET_KEY)
-    .update(message)
-    .digest('base64');
+const STARTING_BALANCE_FOR_BACKTEST = 10000; // matches paperWallet.js's real starting balance
+
+const REGIME_LABELS = {
+  bull: 'Bull market',
+  bear: 'Bear market',
+  sideways: 'Sideways / ranging',
+  high_volatility: 'High volatility',
+  unknown: 'Unclassified',
 };
 
-const bitgetHeaders = (method, path, body = '') => {
-  const timestamp = Date.now().toString();
-  return {
-    'ACCESS-KEY': process.env.BITGET_API_KEY,
-    'ACCESS-SIGN': sign(timestamp, method, path, body),
-    'ACCESS-TIMESTAMP': timestamp,
-    'ACCESS-PASSPHRASE': process.env.BITGET_PASSPHRASE,
-    'Content-Type': 'application/json',
-    'locale': 'en-US',
-  };
+/**
+ * Decide whether a strategy is robust across regimes or just got lucky in
+ * one. This is the actual point of multi-regime testing -- a strategy that
+ * is strongly profitable in exactly one regime and loses money in every
+ * other regime it was tested against should be flagged, not silently
+ * averaged into a single number that looks fine overall.
+ */
+const buildRobustnessVerdict = (regimeResults) => {
+  const tested = regimeResults.filter((r) => r.metrics.totalTrades > 0);
+  if (tested.length === 0) {
+    return { robustnessScore: 0, verdict: 'Not enough historical data to test this strategy.' };
+  }
+
+  const profitableRegimes = tested.filter((r) => r.metrics.totalReturn > 0);
+  const losingRegimes = tested.filter((r) => r.metrics.totalReturn <= 0);
+
+  const robustnessScore = Math.round((profitableRegimes.length / tested.length) * 100);
+
+  let verdict;
+  if (tested.length === 1) {
+    verdict = `Only one usable regime was found in the available history -- treat this result as preliminary, not a robustness guarantee.`;
+  } else if (profitableRegimes.length === tested.length) {
+    verdict = `Profitable across all ${tested.length} tested regimes (${tested.map((r) => REGIME_LABELS[r.label]).join(', ')}). This is a genuinely encouraging sign of robustness.`;
+  } else if (profitableRegimes.length === 0) {
+    verdict = `Unprofitable across every tested regime. This strategy's current parameters do not appear to have a real edge.`;
+  } else {
+    verdict = `Profitable in ${profitableRegimes.map((r) => REGIME_LABELS[r.label]).join(', ')} but lost money in ${losingRegimes.map((r) => REGIME_LABELS[r.label]).join(', ')}. This strategy is regime-dependent -- it is not safe to assume it will perform the same way regardless of market conditions.`;
+  }
+
+  return { robustnessScore, verdict };
 };
 
+// POST /api/backtest/run
+// Replaces a strategy's claims with a real, multi-regime historical replay.
 router.post('/run', async (req, res) => {
-  const { strategy, asset, timeframe, stopLoss, takeProfit, positionSize } = req.body;
+  const {
+    strategy, asset, timeframe, side, entryType, entryPrice,
+    stopLoss, takeProfit, positionSize, leverage,
+  } = req.body;
+
+  if (!asset || !stopLoss || !takeProfit || !positionSize) {
+    return res.status(400).json({
+      error: 'Missing required fields for backtest: asset, stopLoss, takeProfit, and positionSize are required.',
+    });
+  }
 
   try {
-    // Simulate backtest results while Playbook API is being integrated
-    const mockResults = {
-      strategyName: strategy?.split('\n')[0]?.replace('STRATEGY NAME:', '').trim() || 'Custom Strategy',
-      asset,
-      timeframe,
-      period: 'Jan 1, 2024 – Jun 1, 2024',
-      metrics: {
-        totalReturn: +(Math.random() * 60 - 10).toFixed(2),
-        sharpeRatio: +(Math.random() * 2 + 0.5).toFixed(2),
-        winRate: +(Math.random() * 30 + 45).toFixed(1),
-        maxDrawdown: -(Math.random() * 15 + 2).toFixed(2),
-        totalTrades: Math.floor(Math.random() * 300 + 50),
-        profitFactor: +(Math.random() * 1.5 + 1).toFixed(2),
-      },
-      trades: Array.from({ length: 8 }, (_, i) => {
-        const pnl = +(Math.random() * 1200 - 200).toFixed(2);
-        return {
-          id: i + 1,
-          type: Math.random() > 0.5 ? 'Long' : 'Short',
-          entry: (60000 + Math.random() * 5000).toFixed(1),
-          exit: (60000 + Math.random() * 5000).toFixed(1),
-          pnl,
-          pnlPct: +(pnl / 1000).toFixed(2),
-          time: new Date(Date.now() - i * 86400000).toLocaleDateString(),
-        };
-      }),
-      chartData: Array.from({ length: 30 }, (_, i) => ({
-        day: i + 1,
-        value: 100 + Math.sin(i * 0.3) * 10 + i * 1.5 + Math.random() * 5,
-      })),
+    const segments = await getRegimeSegments(asset, timeframe || '1h', 5);
+
+    if (segments.length === 0) {
+      return res.status(502).json({
+        error: `Could not fetch historical data for ${asset} -- Bitget may not list this pair, or historical candles are unavailable.`,
+      });
+    }
+
+    const strategyConfig = {
+      side: side === 'short' ? 'short' : 'long',
+      entryType: entryType || 'market',
+      entryPrice: entryPrice ? parseFloat(entryPrice) : null,
+      stopLoss: parseFloat(stopLoss),
+      takeProfit: parseFloat(takeProfit),
+      positionSizePercent: parseFloat(positionSize),
+      leverage: leverage && leverage > 1 ? parseFloat(leverage) : 1,
     };
 
-    res.json(mockResults);
+    const regimeResults = segments.map((segment) => {
+      const { trades, endingBalance } = replayStrategyOnCandles(
+        strategyConfig, segment.candles, STARTING_BALANCE_FOR_BACKTEST
+      );
+      const metrics = computeMetrics(trades, STARTING_BALANCE_FOR_BACKTEST);
+      return {
+        label: segment.label,
+        labelDisplay: REGIME_LABELS[segment.label] || segment.label,
+        regimeStats: segment.stats,
+        metrics,
+        fullTrades: trades, // kept for aggregate metrics below, stripped before responding
+        trades: trades.slice(-10), // last 10 trades per regime in the actual response, enough to inspect without bloating the payload
+        endingBalance: parseFloat(endingBalance.toFixed(2)),
+      };
+    });
 
+    const { robustnessScore, verdict } = buildRobustnessVerdict(regimeResults);
+
+    // Aggregate metrics across all regimes combined, computed from the full
+    // (non-truncated) trade lists captured above -- no need to replay twice.
+    const allTrades = regimeResults.flatMap((r) => r.fullTrades);
+    const aggregateMetrics = computeMetrics(allTrades, STARTING_BALANCE_FOR_BACKTEST);
+
+    // Strip fullTrades before sending -- it was only needed for the
+    // aggregate calculation above, not for the client payload.
+    const responseRegimes = regimeResults.map(({ fullTrades, ...rest }) => rest);
+
+    res.json({
+      strategyName: strategy?.split('\n')[0]?.replace('STRATEGY NAME:', '').trim() || 'Custom Strategy',
+      asset,
+      timeframe: timeframe || '1h',
+      startingBalance: STARTING_BALANCE_FOR_BACKTEST,
+      aggregateMetrics,
+      robustnessScore,
+      verdict,
+      regimes: responseRegimes,
+    });
   } catch (error) {
     console.error('Backtest error:', error.message);
     res.status(500).json({ error: 'Backtest failed' });
