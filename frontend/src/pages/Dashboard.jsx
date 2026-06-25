@@ -15,7 +15,7 @@ import Badge from '../components/Badge.jsx';
 export default function Dashboard() {
   const navigate = useNavigate();
   const { address } = useAccount();
- const { bots, loading, toggleBot } = useBots();
+  const { bots, loading, toggleBot } = useBots();
   const visibleBots = bots.filter(b => b.status !== 'closed');
   const { memes, l1s, l2s, loading: marketsLoading } = useMarkets();
   const [tab, setTab] = useState('all');
@@ -60,7 +60,7 @@ export default function Dashboard() {
         </button>
       </div>
 
-     {/* Wallet Balance */}
+      {/* Wallet Balance */}
       <WalletBalance bots={bots} />
 
       {/* Metrics */}
@@ -113,7 +113,7 @@ export default function Dashboard() {
         <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
           Your Bots
         </div>
-    <div className="view-toggle-buttons" style={{ display: 'flex', gap: 8 }}>
+        <div className="view-toggle-buttons" style={{ display: 'flex', gap: 8 }}>
           {['grid', 'list'].map(v => (
             <button
               key={v}
@@ -137,7 +137,7 @@ export default function Dashboard() {
 
       {/* Bot Tabs */}
       <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', marginBottom: 16 }}>
-       {['all', 'active', 'paused'].map(t => (
+        {['all', 'active', 'paused'].map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -149,12 +149,11 @@ export default function Dashboard() {
               borderBottom: tab === t ? '2px solid var(--blue)' : '2px solid transparent',
               background: 'none',
               border: 'none',
-              borderBottom: tab === t ? '2px solid var(--blue)' : '2px solid transparent',
               cursor: 'pointer',
             }}
           >
             {t.charAt(0).toUpperCase() + t.slice(1)}
-           <span style={{ marginLeft: 6, background: 'var(--bg3)', padding: '1px 6px', borderRadius: 10, fontSize: 10 }}>
+            <span style={{ marginLeft: 6, background: 'var(--bg3)', padding: '1px 6px', borderRadius: 10, fontSize: 10 }}>
               {t === 'all' ? visibleBots.length : visibleBots.filter(b => b.status === t).length}
             </span>
           </button>
@@ -190,7 +189,7 @@ export default function Dashboard() {
             + Create Strategy
           </button>
         </div>
-   ) : view === 'grid' ? (
+      ) : view === 'grid' ? (
         <div className="dashboard-grid-view" style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
@@ -198,13 +197,18 @@ export default function Dashboard() {
           marginBottom: 20,
         }}>
           {filtered.map(bot => (
-            <BotCard key={bot.id} bot={bot} onToggle={toggleBot} />
+            // NOTE: the grid view's toggle/delete controls live inside
+            // BotCard.jsx, which Claude has not seen. If BotCard.jsx itself
+            // calls onToggle without checking bot.position, the open-position
+            // guard needs to be added there too -- this prop alone doesn't
+            // enforce anything unless BotCard.jsx respects it.
+            <BotCard key={bot.id} bot={bot} onToggle={toggleBot} disableToggle={bot.position === 'open'} />
           ))}
         </div>
       ) : (
         <div className="dashboard-list-view" style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, marginBottom: 20 }}>
           {filtered.map(bot => (
-           <div
+            <div
               key={bot.id}
               onClick={() => navigate(`/bot/${bot.id}`)}
               className="dashboard-list-row"
@@ -236,7 +240,7 @@ export default function Dashboard() {
                 </div>
               </div>
               <Badge status={bot.status} />
-             <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: (bot.position === 'open' ? bot.unrealizedPnl : bot.pnl) >= 0 ? 'var(--green)' : 'var(--red)' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 13, color: (bot.position === 'open' ? bot.unrealizedPnl : bot.pnl) >= 0 ? 'var(--green)' : 'var(--red)' }}>
                 {bot.position === 'open'
                   ? `${bot.unrealizedPnl >= 0 ? '+' : ''}$${bot.unrealizedPnl?.toFixed(2) ?? '0.00'}`
                   : `${bot.pnl >= 0 ? '+' : ''}$${bot.pnl?.toFixed(2) ?? '0.00'}`}
@@ -247,9 +251,18 @@ export default function Dashboard() {
               <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)' }}>
                 {bot.trades ?? 0}
               </div>
+              {/* FIXED: toggle disabled while a position is open -- pausing a
+                  bot mid-trade would stop the simulator from monitoring its
+                  live TP/SL/liquidation, which is not a safe action to allow
+                  silently from a dashboard row. */}
               <Toggle
                 checked={bot.status === 'active'}
-                onChange={e => { e.stopPropagation(); toggleBot(bot.id); }}
+                disabled={bot.position === 'open'}
+                onChange={e => {
+                  e.stopPropagation();
+                  if (bot.position === 'open') return;
+                  toggleBot(bot.id);
+                }}
               />
             </div>
           ))}
@@ -279,7 +292,6 @@ export default function Dashboard() {
               borderBottom: marketTab === t.id ? '2px solid var(--blue)' : '2px solid transparent',
               background: 'none',
               border: 'none',
-              borderBottom: marketTab === t.id ? '2px solid var(--blue)' : '2px solid transparent',
               cursor: 'pointer',
             }}
           >
@@ -291,9 +303,9 @@ export default function Dashboard() {
       {marketTab === 'l1' && <CoinTable coins={l1s} title="Layer 1 Blockchains" icon="⛓️" />}
       {marketTab === 'l2' && <CoinTable coins={l2s} title="Layer 2 Networks" icon="🔷" />}
       {marketTab === 'meme' && <CoinTable coins={memes} title="Meme Coins" icon="🐸" />}
-{/* Whale Events */}
+      {/* Whale Events */}
       <WhaleEvents />
-       <div style={{ padding: 20, paddingBottom: 20 }}></div>
+      <div style={{ padding: 20, paddingBottom: 20 }}></div>
 
       <style>{`
         @media (max-width: 768px) {
