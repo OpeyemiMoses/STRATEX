@@ -55,10 +55,6 @@ export const computeConfidenceRating = async (strategyConfig, asset, timeframe =
   else if (leverage >= 3 || worstDrawdown < -10) riskLevel = 'medium';
   else riskLevel = 'low';
 
-  // --- Overfitting risk: a strategy that looks great in exactly one regime
-  // and mediocre/bad everywhere else is a classic overfitting signature --
-  // it was likely shaped (consciously or not) around one kind of market
-  // behavior rather than a genuinely general edge. ---
   let overfittingRisk;
   if (tested.length <= 1) {
     overfittingRisk = 'high'; // can't even assess generality with one data point
@@ -67,8 +63,6 @@ export const computeConfidenceRating = async (strategyConfig, asset, timeframe =
     const best = Math.max(...returns);
     const others = returns.filter((r) => r !== best);
     const avgOthers = others.reduce((s, r) => s + r, 0) / others.length;
-    // If the best regime massively outperforms the average of the rest,
-    // that's a concentration-of-edge signal.
     overfittingRisk = best > 0 && (best - avgOthers) > 25 ? 'high' : (best - avgOthers) > 10 ? 'medium' : 'low';
   }
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAccount } from 'wagmi';
 import { useBots } from '../hooks/useBots.js';
@@ -12,24 +12,47 @@ import WhaleEvents from '../components/WhaleEvents.jsx';
 import Toggle from '../components/Toggle.jsx';
 import Badge from '../components/Badge.jsx';
 
+const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
   const { bots, loading, toggleBot } = useBots();
   const visibleBots = bots.filter(b => b.status !== 'closed');
   const { memes, l1s, l2s, loading: marketsLoading } = useMarkets();
   const [tab, setTab] = useState('all');
   const [view, setView] = useState('grid');
   const [marketTab, setMarketTab] = useState('l1');
+  const [wallet, setWallet] = useState(null);
+
+  useEffect(() => {
+    if (!isConnected || !address) return;
+    const fetchWallet = async () => {
+      try {
+        const res = await fetch(`${API}/api/bots/wallet/${address}`);
+        const data = await res.json();
+        setWallet(data);
+      } catch (err) {
+        console.error('Dashboard wallet fetch error:', err);
+      }
+    };
+    fetchWallet();
+    const interval = setInterval(fetchWallet, 5000);
+    return () => clearInterval(interval);
+  }, [address, isConnected, bots]);
 
   const filtered = tab === 'all' ? visibleBots : visibleBots.filter(b => b.status === tab);
 
-  const totalPnL = visibleBots.reduce((acc, b) => acc + (b.position === 'open' ? (b.unrealizedPnl || 0) : (b.pnl || 0)), 0);
   const activeBots = visibleBots.filter(b => b.status === 'active').length;
   const avgWinRate = visibleBots.length > 0
     ? (visibleBots.reduce((acc, b) => acc + (b.winRate || 0), 0) / visibleBots.length).toFixed(1)
     : 0;
   const totalTrades = visibleBots.reduce((acc, b) => acc + (b.trades || 0), 0);
+  const unrealizedPnl = bots
+    .filter(b => b.position === 'open')
+    .reduce((acc, b) => acc + (b.unrealizedPnl || 0), 0);
+  const realizedPnl = wallet?.totalPnl ?? 0;
+  const totalPnL = realizedPnl + unrealizedPnl;
 
   return (
     <div style={{ padding: 20 }}>
@@ -197,11 +220,6 @@ export default function Dashboard() {
           marginBottom: 20,
         }}>
           {filtered.map(bot => (
-            // NOTE: the grid view's toggle/delete controls live inside
-            // BotCard.jsx, which Claude has not seen. If BotCard.jsx itself
-            // calls onToggle without checking bot.position, the open-position
-            // guard needs to be added there too -- this prop alone doesn't
-            // enforce anything unless BotCard.jsx respects it.
             <BotCard key={bot.id} bot={bot} onToggle={toggleBot} disableToggle={bot.position === 'open'} />
           ))}
         </div>
@@ -251,10 +269,6 @@ export default function Dashboard() {
               <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)' }}>
                 {bot.trades ?? 0}
               </div>
-              {/* FIXED: toggle disabled while a position is open -- pausing a
-                  bot mid-trade would stop the simulator from monitoring its
-                  live TP/SL/liquidation, which is not a safe action to allow
-                  silently from a dashboard row. */}
               <Toggle
                 checked={bot.status === 'active'}
                 disabled={bot.position === 'open'}
@@ -303,7 +317,6 @@ export default function Dashboard() {
       {marketTab === 'l1' && <CoinTable coins={l1s} title="Layer 1 Blockchains" icon="⛓️" />}
       {marketTab === 'l2' && <CoinTable coins={l2s} title="Layer 2 Networks" icon="🔷" />}
       {marketTab === 'meme' && <CoinTable coins={memes} title="Meme Coins" icon="🐸" />}
-      {/* Whale Events */}
       <WhaleEvents />
       <div style={{ padding: 20, paddingBottom: 20 }}></div>
 

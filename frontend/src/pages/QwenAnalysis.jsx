@@ -13,54 +13,35 @@ export default function QwenAnalysis() {
   const [activeTab, setActiveTab] = useState('market');
   const [streaming, setStreaming] = useState(false);
 
-  useEffect(() => {
-    if (l1s.length > 0) {
-      runMarketAnalysis();
-      runWhaleAnalysis();
-    }
-  }, [l1s]);
+ useEffect(() => {
+  runMarketAnalysis();
+  runWhaleAnalysis();
+}, []);
 
-  const runMarketAnalysis = async () => {
-    setLoading(true);
-    setStreaming(true);
-    setAnalysis('');
-    setSignals([]);
+const runMarketAnalysis = async () => {
+  setLoading(true);
+  setStreaming(true);
+  setAnalysis('');
+  setSignals([]);
 
-    try {
-      const topCoins = [...l1s, ...l2s].slice(0, 8).map(c => ({
-        name: c.name,
-        symbol: c.symbol?.toUpperCase(),
-        price: c.current_price,
-        change24h: c.price_change_percentage_24h?.toFixed(2),
-        change7d: c.price_change_percentage_7d_in_currency?.toFixed(2),
-        marketCap: c.market_cap,
-        volume: c.total_volume,
-      }));
+  try {
+    const res = await fetch(`${API}/api/strategy/market-analysis`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
 
-      const topMemes = memes.slice(0, 5).map(c => ({
-        name: c.name,
-        symbol: c.symbol?.toUpperCase(),
-        price: c.current_price,
-        change24h: c.price_change_percentage_24h?.toFixed(2),
-      }));
-
-      const res = await fetch(`${API}/api/strategy/market-analysis`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topCoins, topMemes, trending: trending.slice(0, 5) }),
-      });
-
-      const data = await res.json();
-      setAnalysis(data.analysis || '');
-      setSignals(data.signals || []);
-    } catch (err) {
-      console.error('Market analysis error:', err);
-      setAnalysis('// Failed to fetch market analysis. Please try again.');
-    } finally {
-      setLoading(false);
-      setStreaming(false);
-    }
-  };
+    const data = await res.json();
+    setAnalysis(data.analysis || '');
+    setSignals(data.signals || []);
+  } catch (err) {
+    console.error('Market analysis error:', err);
+    setAnalysis('// Failed to fetch market analysis. Please try again.');
+  } finally {
+    setLoading(false);
+    setStreaming(false);
+  }
+};
 
   const runWhaleAnalysis = async () => {
     setWhaleLoading(true);
@@ -266,6 +247,7 @@ export default function QwenAnalysis() {
               </div>
             ))
           )}
+          <div style={{ padding: 20, paddingBottom: 20 }}></div>
         </div>
       )}
 

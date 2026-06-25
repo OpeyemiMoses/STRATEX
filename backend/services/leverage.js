@@ -1,13 +1,3 @@
-/**
- * Leverage math for futures-style simulated positions.
- *
- * Key distinction this module enforces everywhere it's used:
- * - MARGIN = what's actually deducted from the paper wallet balance (positionSize% of balance)
- * - EXPOSURE = margin × leverage = the notional size the dollar P&L is applied to
- *
- * Without this distinction, leverage would just be a cosmetic multiplier with no
- * real risk — the liquidation mechanic is what makes it meaningful.
- */
 
 /**
  * @param {number} entryPrice

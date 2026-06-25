@@ -2,6 +2,7 @@ import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { getCurrentMarketState, assessStrategyFit } from '../services/marketState.js';
+import { getContractConfig } from '../services/contractConfig.js';
 
 dotenv.config();
 
@@ -28,15 +29,11 @@ const qwen = async (messages, systemPrompt) => {
   );
   return response.data.choices[0].message.content;
 };
-
-// POST /api/strategy/parse
-// First pass: parse natural language into structured fields, identify what's missing
 router.post('/parse', async (req, res) => {
   const { text } = req.body;
   if (!text) return res.status(400).json({ error: 'No strategy text provided' });
 
   try {
-    // First pass: ask Qwen to identify just the asset, fast and cheap
     const assetSystem = `Identify the crypto asset mentioned in this trading strategy text. Return ONLY the Bitget-style trading pair symbol (e.g. BTCUSDT, ETHUSDT, SOLUSDT, DOGEUSDT, MNTUSDT). No explanation, no markdown, just the symbol.`;
     const assetRaw = await qwen([{ role: 'user', content: text }], assetSystem);
     const detectedAsset = assetRaw.trim().toUpperCase().replace(/[^A-Z]/g, '');
@@ -45,7 +42,9 @@ router.post('/parse', async (req, res) => {
     let livePrice = null;
     let assetUnavailable = false;
     try {
-      const priceRes = await axios.get(`https://api.bitget.com/api/v2/spot/market/tickers?symbol=${assetGuess}`);
+      const priceRes = await axios.get('https://api.bitget.com/api/v2/mix/market/ticker', {
+        params: { symbol: assetGuess, productType: 'USDT-FUTURES' },
+      });
       livePrice = parseFloat(priceRes.data?.data?.[0]?.lastPr);
       if (!livePrice || isNaN(livePrice)) {
         assetUnavailable = true;
@@ -59,9 +58,12 @@ router.post('/parse', async (req, res) => {
     if (assetUnavailable) {
       return res.json({
         parsed: null,
-        error: `${assetGuess.replace('USDT', '')} is not available for trading on Bitget. Please choose a different asset, such as BTC, ETH, SOL, or BNB.`,
+        error: `${assetGuess.replace('USDT', '')} is not available for futures trading on Bitget. Please choose a different asset, such as BTC, ETH, SOL, or BNB.`,
       });
     }
+
+    const contractConfig = await getContractConfig(assetGuess);
+    const maxLever = contractConfig?.maxLever ?? 125;
 
     const system = `You are a trading strategy parser for a crypto trading bot platform.
 ${livePrice ? `The current live market price of ${assetGuess} is $${livePrice}. Use this as ground truth for any "current price" or "buy now" type entries.` : `No live price was available for ${assetGuess} — if this asset isn't tradeable on Bitget, mention that in the summary.`}
@@ -87,9 +89,10 @@ You MUST return a JSON object with EXACTLY these field names, no others, no rena
 
 Rules:
 - Field names must match exactly as shown above. Do NOT use "symbol", "entry", "take_profit", "stop_loss", "direction", or any other naming.
+- "action" must be "buy" for long positions and "sell" for short positions. Parse this carefully: "short", "sell", "go short", "short sell" → "sell". "buy", "long", "go long" → "buy".
 - "entryType" must be "market" if the user wants to buy/sell immediately at current price (e.g. "buy now", "buy at current price", no specific price mentioned), or "limit" if the user specified a target price to wait for (e.g. "buy at $60k", "buy when it drops to $65").
 - "asset" must be a Bitget-style symbol like BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT.
-- "leverage" must be a number, 1 to 125. Extract it ONLY if the user explicitly mentions leverage (e.g. "5x leverage", "10x", "with 3x leverage on this trade") — do NOT infer leverage from context, only from explicit mention. If the user did not mention leverage, set this to null (not 1) — the user will be asked directly. If the extracted leverage is above 20, mention in the summary that this is a high-risk leverage level.
+- "leverage" must be a number, 1 to ${maxLever} (this pair's real exchange-enforced max — never suggest a number above this even if the user asks for more). Extract it ONLY if the user explicitly mentions leverage (e.g. "5x leverage", "10x") — do NOT infer it from context. If not mentioned, set this to null. If the extracted leverage is above 20, mention in the summary that this is a high-risk leverage level.
 - "missing" is an array of field names (from the list above) that the user did not specify and are needed: entryPrice or entryCondition, takeProfitPrice or takeProfitPercent, stopLossPrice or stopLossPercent, positionSizePercent or positionSizeUSDT.
 - ALWAYS add "leverage" to "missing" UNLESS the user explicitly mentioned a leverage number in their text. This means leverage is now a required clarifying question for every strategy that didn't explicitly state it, same as stop loss.
 - If stop loss wasn't mentioned, add "stopLossPrice" to "missing" — do not invent one.
@@ -97,7 +100,6 @@ Rules:
 
     const raw = await qwen([{ role: 'user', content: text }], system);
     let clean = raw.replace(/```json|```/g, '').trim();
-    // Strip any preamble text before the first { and after the last }
     const firstBrace = clean.indexOf('{');
     const lastBrace = clean.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace !== -1) {
@@ -105,6 +107,11 @@ Rules:
     }
     const parsed = JSON.parse(clean);
     parsed.livePrice = livePrice || null;
+    if (parsed.leverage && parsed.leverage > maxLever) {
+      parsed.leverage = maxLever;
+      parsed.leverageCapped = true;
+      parsed.maxAllowedLeverage = maxLever;
+    }
     console.log('[PARSE DEBUG]', JSON.stringify(parsed));
     res.json({ parsed });
   } catch (err) {
@@ -113,10 +120,10 @@ Rules:
   }
 });
 
-// POST /api/strategy/clarify
-// Get the next clarifying question for a missing field
 router.post('/clarify', async (req, res) => {
   const { missingField, strategyContext } = req.body;
+
+  const isShort = strategyContext?.action === 'sell';
 
   const questionMap = {
     'entryPrice': {
@@ -125,22 +132,36 @@ router.post('/clarify', async (req, res) => {
     },
     'entryCondition': {
       question: 'What condition should trigger your entry?',
-      options: ['Buy at current price now', 'Wait for a price dip', 'Wait for RSI oversold signal', 'Wait for MACD crossover'],
+      options: isShort
+        ? ['Short at current price now', 'Wait for a price bounce to short', 'Wait for RSI overbought signal', 'Wait for MACD bearish crossover']
+        : ['Buy at current price now', 'Wait for a price dip', 'Wait for RSI oversold signal', 'Wait for MACD crossover'],
     },
     'takeProfitPrice': {
-      question: 'At what price or % gain do you want to take profit?',
-      options: ['2% above entry', '5% above entry', '10% above entry', 'Set a specific price'],
+      question: isShort
+        ? 'At what price or % drop do you want to take profit?'
+        : 'At what price or % gain do you want to take profit?',
+      options: isShort
+        ? ['2% below entry', '5% below entry', '10% below entry', 'Set a specific price']
+        : ['2% above entry', '5% above entry', '10% above entry', 'Set a specific price'],
     },
     'takeProfitPercent': {
-      question: 'What % gain should trigger your take profit?',
+      question: isShort
+        ? 'What % drop should trigger your take profit?'
+        : 'What % gain should trigger your take profit?',
       options: ['2%', '5%', '10%', '20%'],
     },
     'stopLossPrice': {
-      question: 'At what price or % loss should the bot cut the position?',
-      options: ['1% below entry', '2% below entry', '5% below entry', 'Set a specific price'],
+      question: isShort
+        ? 'At what price or % rise should the bot cut the position?'
+        : 'At what price or % loss should the bot cut the position?',
+      options: isShort
+        ? ['1% above entry', '2% above entry', '5% above entry', 'Set a specific price']
+        : ['1% below entry', '2% below entry', '5% below entry', 'Set a specific price'],
     },
     'stopLossPercent': {
-      question: 'What % loss should trigger your stop loss?',
+      question: isShort
+        ? 'What % rise should trigger your stop loss?'
+        : 'What % loss should trigger your stop loss?',
       options: ['1%', '2%', '5%', '10%'],
     },
     'positionSizePercent': {
@@ -155,21 +176,12 @@ router.post('/clarify', async (req, res) => {
       question: 'What timeframe should the bot monitor for this strategy?',
       options: ['1 minute', '5 minutes', '1 hour', '4 hours', '1 day'],
     },
-    // Static fallback only -- used if the market-aware leverage branch
-    // below fails to fetch live data. The normal path overrides this.
     'leverage': {
       question: 'Do you want to use leverage on this trade?',
       options: ['No leverage', '2x', '5x', '10x'],
     },
   };
 
-  // Leverage is handled separately from the static questionMap above
-  // because it needs to be market-aware (Section 3, #7): the options
-  // offered should reflect CURRENT volatility for this specific pair,
-  // not always default to the same fixed [2x, 5x, 10x] regardless of
-  // conditions. In a highly volatile market, even 5x carries meaningfully
-  // more liquidation risk than the same multiplier in a calm market, so
-  // the question and the options themselves change to reflect that.
   if (missingField === 'leverage') {
     try {
       const asset = strategyContext?.asset;
@@ -190,7 +202,6 @@ router.post('/clarify', async (req, res) => {
     } catch (err) {
       console.error('Market-aware leverage question failed, falling back to default:', err.message);
     }
-    // Fall through to the static default if market state couldn't be fetched
     return res.json(questionMap.leverage);
   }
 
@@ -203,18 +214,10 @@ router.post('/clarify', async (req, res) => {
 });
 
 // POST /api/strategy/analyse
-// Full risk analysis + safer version suggestion
 router.post('/analyse', async (req, res) => {
   const { parsed } = req.body;
 
   try {
-    // --- Market-aware pre-check (Section 3, #3/#4/#5) ---
-    // Fetch CURRENT conditions for this pair before asking Qwen for a safer
-    // strategy, and run a fast, deterministic structural-fit check. This
-    // runs BEFORE any AI call -- it's the actual pre-creation gate: a
-    // strategy that's structurally mismatched to current conditions (e.g.
-    // a sub-1% TP/SL in a highly volatile market) gets flagged immediately,
-    // rather than only being discoverable after the bot is already live.
     const marketState = await getCurrentMarketState(parsed.asset, parsed.timeframe || '1h');
     const fitAssessment = assessStrategyFit(marketState, parsed);
 
@@ -230,6 +233,7 @@ ${marketState ? `CURRENT MARKET CONDITIONS for ${parsed.asset} (most recent ~48 
 - Net price move: ${marketState.stats.netChangePercent}%
 - Annualized volatility: ${marketState.stats.annualizedVolPercent}%
 - Liquidity: ${marketState.liquidityFlag === 'low' ? 'LOW -- recent volume has dropped sharply' : 'normal'}
+- Funding rate: ${marketState.fundingRate !== null ? `${(marketState.fundingRate * 100).toFixed(3)}% per interval${marketState.fundingSignal !== 'neutral' ? ` -- market is crowded ${marketState.fundingSignal === 'crowded_long' ? 'long' : 'short'}` : ''}` : 'unavailable'}
 - Current price: ${marketState.currentPrice}
 
 Use these REAL current conditions to shape the safer strategy: in a trending market, the safer
@@ -302,11 +306,6 @@ Return ONLY valid JSON, no markdown:
     const clean = raw.replace(/```json|```/g, '').trim();
     const analysis = JSON.parse(clean);
 
-    // NEW — defensive fallback: if Qwen omits "side" on either strategy
-    // (older clients, malformed response, etc.), default each one to the
-    // user's original parsed direction rather than leaving it undefined.
-    // This guarantees CreateStrategy.jsx always has a side to read, even
-    // in a degraded case, without silently producing the WRONG side.
     const originalSide = parsed.action === 'sell' ? 'short' : 'long';
     if (analysis.userStrategy && !analysis.userStrategy.side) {
       analysis.userStrategy.side = originalSide;
@@ -315,9 +314,6 @@ Return ONLY valid JSON, no markdown:
       analysis.saferStrategy.side = originalSide;
     }
 
-    // Always attach the raw market state + fit assessment too, so the
-    // frontend can show this even if Qwen's own shouldTradeNow field is
-    // missing/malformed -- the deterministic check is a reliable fallback.
     analysis.marketState = marketState;
     analysis.fitAssessment = fitAssessment;
     if (analysis.shouldTradeNow === undefined) {
@@ -331,7 +327,7 @@ Return ONLY valid JSON, no markdown:
   }
 });
 
-// POST /api/strategy/analyze (existing — bot verdict for backtest modal)
+// POST /api/strategy/analyze (bot verdict for backtest modal)
 router.post('/analyze', async (req, res) => {
   const { bot, backtestResults } = req.body;
   try {
@@ -347,24 +343,177 @@ router.post('/analyze', async (req, res) => {
 
 // POST /api/strategy/market-analysis
 router.post('/market-analysis', async (req, res) => {
-  const { asset } = req.body;
+  const TOP_SYMBOLS = [
+    'BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
+    'AVAXUSDT','DOGEUSDT','ADAUSDT','LINKUSDT','MATICUSDT',
+  ];
+  const PRODUCT_TYPE = 'USDT-FUTURES';
+
   try {
-    const system = `You are a crypto market analyst. Give a concise market analysis for the requested asset. Include trend, key levels, and a trade signal. Max 150 words.`;
-    const analysis = await qwen([{ role: 'user', content: `Analyse ${asset || 'BTC'} market conditions` }], system);
-    res.json({ analysis });
+    const tickerRes = await axios.get('https://api.bitget.com/api/v2/mix/market/tickers', {
+      params: { productType: PRODUCT_TYPE },
+    });
+    const allTickers = tickerRes.data?.data || [];
+
+    const marketData = allTickers
+      .filter(t => TOP_SYMBOLS.includes(t.symbol))
+      .map(t => ({
+        symbol: t.symbol.replace('USDT', ''),
+        pair: t.symbol,
+        price: parseFloat(t.lastPr),
+        change24h: parseFloat(t.change24h) * 100,
+        high24h: parseFloat(t.high24h),
+        low24h: parseFloat(t.low24h),
+        volume24hUSDT: parseFloat(t.quoteVolume),
+        fundingRate: parseFloat(t.fundingRate) * 100,
+        openInterest: parseFloat(t.holdingAmount),
+      }))
+      .sort((a, b) => Math.abs(b.change24h) - Math.abs(a.change24h));
+
+    if (!marketData.length) {
+      return res.status(502).json({ error: 'No market data returned from Bitget' });
+    }
+
+    const system = `You are a professional crypto market analyst. You will be given REAL live market data from Bitget's USDT-M perpetual futures market right now.
+
+Your task:
+1. Write a concise market analysis (4-6 sentences) covering: overall market sentiment, which assets are leading/lagging, notable volume or funding rate signals, and any regime you see (trending, ranging, risk-on/off).
+2. Generate 3 high-quality trade signals based strictly on the data provided. Each signal must be grounded in the actual numbers — reference the specific price, change, or funding rate that justifies the signal.
+
+Return ONLY valid JSON, no markdown fences:
+{
+  "analysis": "your 4-6 sentence analysis here",
+  "signals": [
+    {
+      "symbol": "BTCUSDT",
+      "name": "Bitcoin",
+      "direction": "LONG",
+      "currentPrice": 65000,
+      "entry": "$64,800 - $65,200",
+      "takeProfit": "$68,000",
+      "stopLoss": "$63,500",
+      "confidence": "High",
+      "timeframe": "4h",
+      "reasoning": "1-2 sentences referencing the actual data that supports this signal"
+    }
+  ]
+}
+
+Rules:
+- direction must be "LONG" or "SHORT"
+- confidence must be "High", "Medium", or "Low"
+- entry/takeProfit/stopLoss must be price strings with $ sign
+- symbol must match what you were given (e.g. "BTCUSDT")
+- name is the full asset name (Bitcoin, Ethereum, etc.)
+- base signals on the real data — if a coin is down 8% with high volume, that's bearish. If funding rate is very negative on a coin that's recovering, that's a potential long squeeze.`;
+
+    const userContent = `Here is the current live market data from Bitget futures (as of right now):
+
+${marketData.map(m =>
+  `${m.symbol}: $${m.price.toLocaleString()} | 24h: ${m.change24h >= 0 ? '+' : ''}${m.change24h.toFixed(2)}% | High: $${m.high24h.toLocaleString()} | Low: $${m.low24h.toLocaleString()} | Volume: $${(m.volume24hUSDT / 1e6).toFixed(1)}M | Funding: ${m.fundingRate.toFixed(4)}%`
+).join('\n')}
+
+Analyse this data and generate 3 trade signals.`;
+
+    const raw = await qwen([{ role: 'user', content: userContent }], system);
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const firstBrace = clean.indexOf('{');
+    const lastBrace = clean.lastIndexOf('}');
+    const parsed = JSON.parse(clean.slice(firstBrace, lastBrace + 1));
+
+    res.json({
+      analysis: parsed.analysis || '',
+      signals: parsed.signals || [],
+    });
   } catch (err) {
-    res.status(500).json({ error: 'Failed' });
+    console.error('Market analysis error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch market analysis' });
   }
 });
 
 // POST /api/strategy/whale-analysis
 router.post('/whale-analysis', async (req, res) => {
+  const WATCH_SYMBOLS = [
+    'BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',
+    'AVAXUSDT','DOGEUSDT','ADAUSDT','MATICUSDT','SHIBUSDT',
+  ];
+  const PRODUCT_TYPE = 'USDT-FUTURES';
+  const WHALE_THRESHOLD_USD = 500_000;
+
   try {
-    const system = `You are a crypto on-chain analyst specialising in whale activity. Describe recent whale movements and what they signal for the market. Max 150 words.`;
-    const analysis = await qwen([{ role: 'user', content: 'Summarise recent whale activity in crypto markets' }], system);
+    const allTrades = [];
+    await Promise.allSettled(
+      WATCH_SYMBOLS.map(async (symbol) => {
+        try {
+          const { data } = await axios.get('https://api.bitget.com/api/v2/mix/market/fills', {
+            params: { symbol, limit: 100, productType: PRODUCT_TYPE },
+          });
+          if (data.code !== '00000' || !Array.isArray(data.data)) return;
+          for (const fill of data.data) {
+            const price = parseFloat(fill.price);
+            const size = parseFloat(fill.size);
+            const usdValue = price * size;
+            if (usdValue < WHALE_THRESHOLD_USD) continue;
+            allTrades.push({
+              symbol: symbol.replace('USDT', ''),
+              side: fill.side,
+              price,
+              size,
+              usdValue,
+              minutesAgo: Math.round((Date.now() - parseInt(fill.ts)) / 60000),
+            });
+          }
+        } catch (_) {}
+      })
+    );
+
+    allTrades.sort((a, b) => b.usdValue - a.usdValue);
+    const topTrades = allTrades.slice(0, 15);
+
+    let oiSummary = '';
+    try {
+      const oiRes = await axios.get('https://api.bitget.com/api/v2/mix/market/open-interest', {
+        params: { symbol: 'BTCUSDT', productType: PRODUCT_TYPE },
+      });
+      const oi = oiRes.data?.data;
+      if (oi) {
+        oiSummary = `BTC open interest: ${parseFloat(oi.openInterestList?.[0]?.size || 0).toLocaleString()} contracts`;
+      }
+    } catch (_) {}
+
+    if (!topTrades.length) {
+      const analysis = await qwen(
+        [{ role: 'user', content: 'No trades above $500k were detected in the last sample window across BTC, ETH, SOL, BNB, XRP, AVAX, DOGE, ADA, MATIC, SHIB. What does an absence of visible whale activity typically signal? Keep it to 3-4 sentences.' }],
+        'You are a crypto on-chain and order-flow analyst. Be honest about data limitations.'
+      );
+      return res.json({ analysis });
+    }
+
+    const system = `You are a crypto market analyst specialising in large-order flow and whale behaviour on perpetual futures markets. You will be given REAL recent trade data from Bitget — only trades above $500,000 USD are included.
+
+Analyse this data in 5-6 sentences covering:
+- Which assets whales are buying vs selling
+- Whether the buying/selling is clustered (same symbol, same direction) or dispersed
+- What the aggregate whale sentiment implies for short-term price action
+- Any contrarian signals (e.g. large sells into a rising asset, or large buys on a recent dip)
+
+Be specific — reference the actual symbols, sizes, and directions from the data. Do not be vague. Return only the analysis text, no JSON, no headings.`;
+
+    const userContent = `Real whale trades from Bitget futures in the last few minutes (trades ≥ $500,000 USD):
+
+${topTrades.map(t =>
+  `${t.symbol} | ${t.side.toUpperCase()} | $${(t.usdValue / 1000).toFixed(0)}K | ${t.minutesAgo < 1 ? 'just now' : `${t.minutesAgo}m ago`} @ $${t.price.toLocaleString()}`
+).join('\n')}
+
+${oiSummary ? `\nAdditional context: ${oiSummary}` : ''}
+
+What does this whale activity tell us about current market positioning?`;
+
+    const analysis = await qwen([{ role: 'user', content: userContent }], system);
     res.json({ analysis });
   } catch (err) {
-    res.status(500).json({ error: 'Failed' });
+    console.error('Whale analysis error:', err.message);
+    res.status(500).json({ error: 'Failed to fetch whale analysis' });
   }
 });
 

@@ -30,12 +30,6 @@ export default function PnLCard({ bot, isClosed = false }) {
     return () => window.removeEventListener('resize', updateScale);
   }, []);
 
-  // FIXED: real route is GET /api/signals/ticker/:symbol (path param, not
-  // query string), and it returns { price: '...' } as a string -- '0' on any
-  // backend-side failure, never null/undefined. The old data.price ?? data.lastPr
-  // fallback would silently accept that '0' string as a valid price instead of
-  // treating it as "unavailable", which is the root cause of the current price
-  // never showing correctly.
   const fetchLivePrice = async () => {
     try {
       const res = await fetch(`${API}/api/signals/ticker/${bot.asset}`);
@@ -48,12 +42,6 @@ export default function PnLCard({ bot, isClosed = false }) {
     }
   };
 
-  // Fetch the live price as soon as the card mounts (i.e. as soon as the
-  // modal opens), not only when the download button is clicked -- otherwise
-  // the on-screen preview never shows "Current" since handleDownload fires
-  // the fetch and then immediately captures/downloads, giving no real chance
-  // to see it update on screen. Also refresh periodically while open so the
-  // preview doesn't go stale if the user leaves the modal open a while.
   useEffect(() => {
     if (isClosed) return; // closed trades use stored final values, no live fetch needed
     let cancelled = false;
@@ -72,9 +60,6 @@ export default function PnLCard({ bot, isClosed = false }) {
   }, [isClosed, bot.asset]);
 
 
-  // Leverage-correct P&L calculation -- mirrors calculateLeveragedPnl in leverage.js
-  // pnlPercent is the raw price move (leverage is NOT applied to the %)
-  // dollarPnl is calculated against exposure (margin x leverage), not just margin
   const computeLivePnl = (price) => {
     const entry = bot.filledEntry;
     if (!price || !entry) {
@@ -94,7 +79,6 @@ export default function PnLCard({ bot, isClosed = false }) {
       ? ((entry - price) / entry) * 100
       : ((price - entry) / entry) * 100;
 
-    // Percent shown to user = raw price move, leverage not applied
     const pnlPercent = rawMovePercent;
 
     // Dollar P&L against full exposure
@@ -133,9 +117,6 @@ export default function PnLCard({ bot, isClosed = false }) {
   };
 
   const displayPrice = isClosed ? null : livePrice;
-
-  // For closed trades use stored final values (already leverage-correct from simulator)
-  // For live trades compute fresh from current price with leverage
   const { pnl, pnlPercent } = isClosed
     ? { pnl: bot.finalPnl ?? bot.pnl, pnlPercent: bot.finalPnlPercent ?? bot.pnlPercent }
     : computeLivePnl(displayPrice);

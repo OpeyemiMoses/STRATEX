@@ -34,11 +34,6 @@ export default function BacktestModal({ bot, onClose }) {
     setAnalysis('');
     setError('');
     try {
-      // FIXED: the old request was missing side, entryType, entryPrice, and
-      // leverage -- the real backtest engine needs all of these to replay
-      // the strategy correctly. Without them it would silently default to
-      // long/market/1x regardless of how this bot was actually configured,
-      // producing results that don't match the bot's real behavior.
       const btRes = await fetch(`${API}/api/backtest/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

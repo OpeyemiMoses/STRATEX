@@ -37,9 +37,6 @@ export const replayStrategyOnCandles = (strategy, candles, startingBalance) => {
   let position = null; // null when flat, else { entryFillPrice, margin, exposure, liquidationPrice }
 
   for (const candle of candles) {
-    // Use the candle's close as the reference price for entry/exit checks —
-    // a simplification vs. checking high/low intrabar, but consistent with
-    // how simulator.js evaluates against a single polled price per tick.
     const price = candle.close;
 
     if (!position) {
@@ -62,8 +59,6 @@ export const replayStrategyOnCandles = (strategy, candles, startingBalance) => {
       continue;
     }
 
-    // Position is open — check liquidation first (matches simulator.js
-    // priority ordering), then TP/SL.
     if (isLiquidated(price, position.liquidationPrice, side)) {
       trades.push({
         entryPrice: position.entryFillPrice,
@@ -100,10 +95,6 @@ export const replayStrategyOnCandles = (strategy, candles, startingBalance) => {
     }
   }
 
-  // If a position is still open at the end of the segment, mark it to
-  // market at the last candle's close so it contributes to metrics rather
-  // than vanishing silently -- flagged as 'open_at_segment_end' so callers
-  // can treat it differently from a genuinely-closed trade if needed.
   if (position) {
     const lastPrice = candles[candles.length - 1].close;
     const { pnl, pnlPercent } = calculateLeveragedPnl(
@@ -124,11 +115,6 @@ export const replayStrategyOnCandles = (strategy, candles, startingBalance) => {
   return { trades, endingBalance: balance };
 };
 
-/**
- * Compute aggregate performance metrics from a list of trades, given a
- * starting balance. Returns real numbers derived from the trades, never
- * randomized.
- */
 export const computeMetrics = (trades, startingBalance) => {
   if (trades.length === 0) {
     return {
@@ -158,10 +144,6 @@ export const computeMetrics = (trades, startingBalance) => {
     if (drawdownPercent < maxDrawdown) maxDrawdown = drawdownPercent;
   }
 
-  // Simplified Sharpe-style ratio: mean trade return / stddev of trade
-  // returns. Not annualized against a risk-free rate (this is a paper
-  // trading sim, not a fund) — used as a relative consistency measure
-  // between strategies/regimes, not as a literal industry-standard Sharpe.
   const pctReturns = trades.map((t) => t.pnlPercent);
   const meanReturn = pctReturns.reduce((s, r) => s + r, 0) / pctReturns.length;
   const variance = pctReturns.reduce((s, r) => s + (r - meanReturn) ** 2, 0) / pctReturns.length;

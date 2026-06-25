@@ -69,15 +69,10 @@ export const deductBalance = (address, amount) => {
   return wallet.balance;
 };
 
-// amount = margin returned + leveraged P&L (can be negative)
-// dollarPnl = the actual leveraged profit/loss to accumulate into totalPnl
 export const addBalance = (address, amount, dollarPnl = null) => {
   const wallet = getWallet(address);
   wallet.balance += amount;
 
-  // If caller passes the explicit P&L figure, accumulate it permanently.
-  // Falls back to inferring from amount vs positionValue if not provided
-  // (for backward compat with any call sites that don't pass dollarPnl yet).
   if (dollarPnl !== null) {
     wallet.totalPnl = (wallet.totalPnl || 0) + dollarPnl;
   }

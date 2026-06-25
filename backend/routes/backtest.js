@@ -14,13 +14,7 @@ const REGIME_LABELS = {
   unknown: 'Unclassified',
 };
 
-/**
- * Decide whether a strategy is robust across regimes or just got lucky in
- * one. This is the actual point of multi-regime testing -- a strategy that
- * is strongly profitable in exactly one regime and loses money in every
- * other regime it was tested against should be flagged, not silently
- * averaged into a single number that looks fine overall.
- */
+
 const buildRobustnessVerdict = (regimeResults) => {
   const tested = regimeResults.filter((r) => r.metrics.totalTrades > 0);
   if (tested.length === 0) {
@@ -46,8 +40,6 @@ const buildRobustnessVerdict = (regimeResults) => {
   return { robustnessScore, verdict };
 };
 
-// POST /api/backtest/run
-// Replaces a strategy's claims with a real, multi-regime historical replay.
 router.post('/run', async (req, res) => {
   const {
     strategy, asset, timeframe, side, entryType, entryPrice,
@@ -89,7 +81,7 @@ router.post('/run', async (req, res) => {
         labelDisplay: REGIME_LABELS[segment.label] || segment.label,
         regimeStats: segment.stats,
         metrics,
-        fullTrades: trades, // kept for aggregate metrics below, stripped before responding
+        fullTrades: trades, 
         trades: trades.slice(-10), // last 10 trades per regime in the actual response, enough to inspect without bloating the payload
         endingBalance: parseFloat(endingBalance.toFixed(2)),
       };
@@ -97,13 +89,10 @@ router.post('/run', async (req, res) => {
 
     const { robustnessScore, verdict } = buildRobustnessVerdict(regimeResults);
 
-    // Aggregate metrics across all regimes combined, computed from the full
-    // (non-truncated) trade lists captured above -- no need to replay twice.
     const allTrades = regimeResults.flatMap((r) => r.fullTrades);
     const aggregateMetrics = computeMetrics(allTrades, STARTING_BALANCE_FOR_BACKTEST);
 
-    // Strip fullTrades before sending -- it was only needed for the
-    // aggregate calculation above, not for the client payload.
+    
     const responseRegimes = regimeResults.map(({ fullTrades, ...rest }) => rest);
 
     res.json({

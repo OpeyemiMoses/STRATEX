@@ -6,16 +6,33 @@ export default function CandlestickChart({ symbol = 'BTCUSDT', interval = '1H', 
   const [loading, setLoading] = useState(true);
   const wsRef = useRef(null);
 
-  const GRANULARITY_MAP = {
+ const GRANULARITY_MAP = {
+  '1m': '1m',
+  '3m': '3m',
+  '5m': '5m',
+  '15m': '15m',
+  '30m': '30m',
+  '1h': '1H',
+  '4h': '4H',
+  '6h': '6H',
+  '12h': '12H',
+  '1d': '1D',
+  '1w': '1W',
+  '1M': '1M',
+};
+
+ 
+  const WS_INTERVAL_MAP = {
     '1m': '1min', '5m': '5min', '15m': '15min',
     '30m': '30min', '1H': '1H', '4H': '4H', '1D': '1Dutc',
   };
 
   const fetchCandles = async () => {
     try {
-      const granularity = GRANULARITY_MAP[interval] || '1H';
+      const granularity = GRANULARITY_MAP[interval] || '1h';
+      // FIXED: was /api/v2/spot/market/candles — now USDT-M futures candles
       const res = await fetch(
-        `https://api.bitget.com/api/v2/spot/market/candles?symbol=${symbol}&granularity=${granularity}&limit=100`
+        `https://api.bitget.com/api/v2/mix/market/candles?symbol=${symbol}&granularity=${granularity}&productType=USDT-FUTURES&limit=100`
       );
       const data = await res.json();
       if (data.data && Array.isArray(data.data)) {
@@ -43,9 +60,14 @@ export default function CandlestickChart({ symbol = 'BTCUSDT', interval = '1H', 
       wsRef.current = ws;
 
       ws.onopen = () => {
+        // FIXED: was instType: 'SPOT' — now USDT-FUTURES perpetuals
         ws.send(JSON.stringify({
           op: 'subscribe',
-          args: [{ instType: 'SPOT', channel: `candle${interval}`, instId: symbol }],
+          args: [{
+            instType: 'USDT-FUTURES',
+            channel: `candle${WS_INTERVAL_MAP[interval] || '1H'}`,
+            instId: symbol,
+          }],
         }));
       };
 

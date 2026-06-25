@@ -39,16 +39,6 @@ export default function DecisionConsole() {
   const lastSeenTimestampRef = useRef(null);
   const panelRef = useRef(null);
   const buttonRef = useRef(null);
-
-  // Hide on landing page or when not connected -- computed here, but NOT
-  // used to bail out early. The actual "don't render anything" decision
-  // happens at the very end, after every hook below has already run. Every
-  // hook must execute on every render, in the same order, no matter what --
-  // an early `return null` placed before a hook call is what caused
-  // "Rendered more hooks than during the previous render": on a landing-page
-  // render this component would stop before ever reaching the two
-  // useEffect calls further down, so React saw a different hook count than
-  // on a render where isConnected was true.
   const isLanding = location.pathname === '/';
   const shouldRender = !isLanding && isConnected;
 
@@ -78,9 +68,6 @@ export default function DecisionConsole() {
     }
   };
 
-  // Polling effect -- now guarded INSIDE the effect body instead of skipping
-  // the hook call itself. The hook always runs; it just may choose to do
-  // nothing when shouldRender is false.
   useEffect(() => {
     if (!shouldRender) return;
     fetchEntries();
@@ -88,7 +75,6 @@ export default function DecisionConsole() {
     return () => clearInterval(interval);
   }, [activeTab, address, shouldRender]);
 
-  // Close on outside click -- same pattern, guard inside the effect body.
   useEffect(() => {
     if (!shouldRender || !isOpen) return;
     const handleOutsideClick = (e) => {
@@ -124,9 +110,6 @@ export default function DecisionConsole() {
     }
   };
 
-  // The ONLY place we bail out of rendering JSX -- placed after every hook
-  // above has already run unconditionally, so the hook count is identical
-  // on every render regardless of route or connection state.
   if (!shouldRender) return null;
 
   return (

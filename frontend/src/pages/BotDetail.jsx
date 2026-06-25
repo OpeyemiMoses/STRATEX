@@ -5,9 +5,9 @@ import PnLChart from '../components/PnLChart.jsx';
 import Badge from '../components/Badge.jsx';
 import Toggle from '../components/Toggle.jsx';
 import AssetIcon from '../components/AssetIcon.jsx';
-import PnLCard from '../components/PnLCard.jsx'; // NEW (#4)
+import PnLCard from '../components/PnLCard.jsx';
 import Modal from '../components/Modal.jsx';
-import { toast } from '../components/Toast.jsx'; // NEW — modal wrapper for audit + PnL card
+import { toast } from '../components/Toast.jsx';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -19,14 +19,21 @@ export default function BotDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [closing, setClosing] = useState(false);
 
-  // Bot auditing state (#12) — modal-based now, not inline
+  // Bot auditing state
   const [auditing, setAuditing] = useState(false);
   const [auditResult, setAuditResult] = useState(null);
   const [auditError, setAuditError] = useState('');
   const [showAuditModal, setShowAuditModal] = useState(false);
 
-  // Downloadable PnL card (#4) — modal-based now, not inline
+  // PnL card modal
   const [showPnlModal, setShowPnlModal] = useState(false);
+
+  // Edit position modal
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editSL, setEditSL] = useState('');
+  const [editTP, setEditTP] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
 
   const bot = bots.find(b => b.id === id);
 
@@ -38,16 +45,15 @@ export default function BotDetail() {
     try {
       const res = await fetch(`${API}/api/bots/${bot.id}/close`, { method: 'POST' });
       if (!res.ok) throw new Error('Failed to close');
-       toast.success('Position closed successfully.');
+      toast.success('Position closed successfully.');
       await refetch();
     } catch (err) {
-     toast.error('Failed to close position. Please try again.');
+      toast.error('Failed to close position. Please try again.');
     } finally {
       setClosing(false);
     }
   };
 
-  // NEW (#12)
   const handleAuditBot = async () => {
     setShowAuditModal(true);
     setAuditing(true);
@@ -62,6 +68,51 @@ export default function BotDetail() {
       setAuditError('Failed to audit this bot. Please try again.');
     } finally {
       setAuditing(false);
+    }
+  };
+
+  const openEditModal = () => {
+    setEditSL(bot.stopLoss ? String(bot.stopLoss) : '');
+    setEditTP(bot.takeProfit ? String(bot.takeProfit) : '');
+    setEditError('');
+    setShowEditModal(true);
+  };
+
+  const handleSavePosition = async () => {
+    setEditError('');
+    const sl = parseFloat(editSL);
+    const tp = parseFloat(editTP);
+
+    if (isNaN(sl) || sl <= 0) { setEditError('Enter a valid stop loss price.'); return; }
+    if (isNaN(tp) || tp <= 0) { setEditError('Enter a valid take profit price.'); return; }
+
+    // Direction-aware validation
+    if (bot.side === 'long') {
+      if (sl >= bot.filledEntry) { setEditError('Stop loss must be below your entry price for a long.'); return; }
+      if (tp <= bot.filledEntry) { setEditError('Take profit must be above your entry price for a long.'); return; }
+    } else {
+      if (sl <= bot.filledEntry) { setEditError('Stop loss must be above your entry price for a short.'); return; }
+      if (tp >= bot.filledEntry) { setEditError('Take profit must be below your entry price for a short.'); return; }
+    }
+
+    setEditSaving(true);
+    try {
+      const res = await fetch(`${API}/api/bots/${bot.id}/position`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stopLoss: sl, takeProfit: tp }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to save');
+      }
+      await refetch();
+      setShowEditModal(false);
+      toast.success('Stop loss and take profit updated.');
+    } catch (err) {
+      setEditError(err.message || 'Failed to save changes.');
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -81,14 +132,14 @@ export default function BotDetail() {
     await deleteBot(bot.id);
     navigate('/dashboard');
   };
-  const handleToggle = async () => {
-  if (bot.position === 'open') {
-    toast.warning('Cannot pause a bot with an open position. Close the position first.');
-    return;
-  }
-  await toggleBot(bot.id);
-};
 
+  const handleToggle = async () => {
+    if (bot.position === 'open') {
+      toast.warning('Cannot pause a bot with an open position. Close the position first.');
+      return;
+    }
+    await toggleBot(bot.id);
+  };
 
   const tdStyle = {
     padding: '10px 12px',
@@ -116,15 +167,26 @@ export default function BotDetail() {
     critical: 'var(--red)',
   };
 
-  // NEW (Section 3) — color helpers for the confidence rating card
   const ratingColor = { low: 'var(--green)', medium: '#F59E0B', high: 'var(--red)' };
   const robustnessColor = (score) =>
     score >= 70 ? 'var(--green)' : score >= 40 ? '#F59E0B' : 'var(--red)';
 
-  // Real trade log — USER
   const tradelog = bot.tradelog || [];
   const hasLeverage = bot.leverage && bot.leverage > 1;
-  const cr = bot.confidenceRating; // NEW (Section 3) — may be null/undefined for older bots or failed backtests
+  const cr = bot.confidenceRating;
+
+  const inputStyle = {
+    width: '100%',
+    background: 'var(--bg3)',
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    padding: '10px 12px',
+    fontFamily: 'var(--mono)',
+    fontSize: 13,
+    color: 'var(--text)',
+    outline: 'none',
+    boxSizing: 'border-box',
+  };
 
   return (
     <div style={{ padding: 20 }}>
@@ -148,7 +210,6 @@ export default function BotDetail() {
         <div>
           <div style={{ fontWeight: 600, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
             {bot.name}
-            {/* NEW (#3) — leverage badge, only shown when leveraged */}
             {hasLeverage && (
               <span style={{
                 fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
@@ -170,11 +231,7 @@ export default function BotDetail() {
         </div>
       </div>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr 300px',
-        gap: 16,
-      }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16 }}>
         {/* Left */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
@@ -184,14 +241,34 @@ export default function BotDetail() {
               <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 Current Position
               </div>
-              <span style={{
-                fontFamily: 'var(--mono)', fontSize: 11,
-                color: bot.position === 'open' ? 'var(--blue)' : bot.position === 'closed' ? 'var(--text-dim)' : (bot.status === 'active' ? 'var(--green)' : 'var(--text-dim)'),
-                background: bot.position === 'open' ? 'rgba(27,111,248,0.1)' : bot.position === 'closed' ? 'var(--bg3)' : (bot.status === 'active' ? 'rgba(0,214,143,0.1)' : 'var(--bg3)'),
-                padding: '2px 8px', borderRadius: 4,
-              }}>
-                {bot.position === 'open' ? 'Position Open' : bot.position === 'closed' ? 'Closed' : (bot.status === 'active' ? 'Waiting to fill' : 'Inactive')}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Edit SL/TP button — only shown when position is open */}
+                {bot.position === 'open' && (
+                  <button
+                    onClick={openEditModal}
+                    style={{
+                      background: 'transparent',
+                      color: '#F59E0B',
+                      border: '1px solid rgba(245,158,11,0.4)',
+                      borderRadius: 5,
+                      padding: '3px 10px',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      fontFamily: 'var(--mono)',
+                    }}
+                  >
+                    ✏ Edit SL / TP
+                  </button>
+                )}
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 11,
+                  color: bot.position === 'open' ? 'var(--blue)' : bot.position === 'closed' ? 'var(--text-dim)' : (bot.status === 'active' ? 'var(--green)' : 'var(--text-dim)'),
+                  background: bot.position === 'open' ? 'rgba(27,111,248,0.1)' : bot.position === 'closed' ? 'var(--bg3)' : (bot.status === 'active' ? 'rgba(0,214,143,0.1)' : 'var(--bg3)'),
+                  padding: '2px 8px', borderRadius: 4,
+                }}>
+                  {bot.position === 'open' ? 'Position Open' : bot.position === 'closed' ? 'Closed' : (bot.status === 'active' ? 'Waiting to fill' : 'Inactive')}
+                </span>
+              </div>
             </div>
 
             {bot.position === 'open' && bot.unrealizedPnl != null && (
@@ -214,12 +291,10 @@ export default function BotDetail() {
                   </span>
                 </div>
                 {bot.lastPrice && (
-                  // FIXED: was hardcoded "updates every 60s" — simulator now polls every 5s
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 6 }}>
                     Current price: ${bot.lastPrice} · updates every 5s
                   </div>
                 )}
-                {/* NEW (#3) — liquidation warning, only for leveraged positions */}
                 {hasLeverage && bot.liquidationPrice && (
                   <div style={{
                     fontFamily: 'var(--mono)', fontSize: 10, color: '#F59E0B',
@@ -274,16 +349,12 @@ export default function BotDetail() {
             </div>
           </div>
 
-          {/* NEW (Section 3) — Confidence Rating: robustness score, risk level,
-              overfitting risk, market adaptability, plain-English explanation.
-              Null-safe: bots created before this feature, or where the
-              backtest had no historical data, simply won't have this. */}
+          {/* Confidence Rating */}
           {cr ? (
             <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 14 }}>
                 Confidence Rating
               </div>
-
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
                 <div style={{
                   width: 56, height: 56, borderRadius: '50%',
@@ -297,7 +368,6 @@ export default function BotDetail() {
                   Robustness score — % of tested market regimes this strategy was profitable in.
                 </div>
               </div>
-
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
                 {[
                   { l: 'Risk Level', v: cr.riskLevel },
@@ -317,7 +387,6 @@ export default function BotDetail() {
                   </div>
                 ))}
               </div>
-
               {cr.explanation && (
                 <div style={{
                   fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-mid)',
@@ -326,23 +395,19 @@ export default function BotDetail() {
                   {cr.explanation}
                 </div>
               )}
-
               {cr.regimeResults?.length > 0 && (
                 <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {cr.regimeResults.map((r, i) => {
                     const profitable = r.metrics.totalReturn > 0;
                     return (
-                      <div
-                        key={i}
-                        style={{
-                          fontFamily: 'var(--mono)', fontSize: 10,
-                          padding: '4px 9px', borderRadius: 12,
-                          background: profitable ? 'rgba(0,214,143,0.08)' : 'rgba(255,77,106,0.08)',
-                          border: `1px solid ${profitable ? 'rgba(0,214,143,0.25)' : 'rgba(255,77,106,0.25)'}`,
-                          color: profitable ? 'var(--green)' : 'var(--red)',
-                          textTransform: 'capitalize',
-                        }}
-                      >
+                      <div key={i} style={{
+                        fontFamily: 'var(--mono)', fontSize: 10,
+                        padding: '4px 9px', borderRadius: 12,
+                        background: profitable ? 'rgba(0,214,143,0.08)' : 'rgba(255,77,106,0.08)',
+                        border: `1px solid ${profitable ? 'rgba(0,214,143,0.25)' : 'rgba(255,77,106,0.25)'}`,
+                        color: profitable ? 'var(--green)' : 'var(--red)',
+                        textTransform: 'capitalize',
+                      }}>
                         {r.label.replace('_', ' ')}: {r.metrics.totalReturn >= 0 ? '+' : ''}{r.metrics.totalReturn?.toFixed(1)}%
                       </div>
                     );
@@ -361,7 +426,7 @@ export default function BotDetail() {
             </div>
           )}
 
-          {/* NEW (#4) — Downloadable PnL card trigger. Renders in a Modal, not inline. */}
+          {/* Shareable PnL Card */}
           {(bot.position === 'open' || bot.position === 'closed') && (
             <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -384,11 +449,7 @@ export default function BotDetail() {
           )}
 
           {/* Metrics */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: 12,
-          }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
             {[
               { l: 'Total P&L', v: `${bot.pnl >= 0 ? '+' : ''}$${bot.pnl?.toFixed(2) ?? '0.00'}${bot.pnlPercent != null ? ` (${bot.pnlPercent >= 0 ? '+' : ''}${bot.pnlPercent.toFixed(2)}%)` : ''}`, c: bot.pnl >= 0 ? 'var(--green)' : 'var(--red)' },
               { l: 'Win Rate', v: `${bot.winRate?.toFixed(1) ?? '0.0'}%`, c: 'var(--text)' },
@@ -405,7 +466,7 @@ export default function BotDetail() {
             ))}
           </div>
 
-          {/* NEW (#12) — Bot Audit trigger. Results render in a Modal, not inline. */}
+          {/* AI Audit */}
           <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -459,10 +520,16 @@ export default function BotDetail() {
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
                       <td style={tdStyle}>{t.time}</td>
-                      <td style={{ ...tdStyle, color: t.side === 'Long' ? 'var(--green)' : t.side === 'Liquidated' ? '#F59E0B' : 'var(--red)' }}>{t.side}</td>
+                      <td style={{
+                        ...tdStyle,
+                        color: t.side === 'Long' ? 'var(--green)'
+                          : t.side === 'Liquidated' ? '#F59E0B'
+                          : t.side === 'Edit' ? 'var(--blue)'
+                          : 'var(--red)',
+                      }}>{t.side}</td>
                       <td style={tdStyle}>{t.price}</td>
                       <td style={tdStyle}>{t.size}</td>
-                      <td style={{ ...tdStyle, color: 'var(--green)' }}>{t.pnl}</td>
+                      <td style={{ ...tdStyle, color: t.side === 'Edit' ? 'var(--text-dim)' : 'var(--green)' }}>{t.pnl}</td>
                     </tr>
                   ))
                 )}
@@ -486,14 +553,11 @@ export default function BotDetail() {
                     key={r}
                     onClick={() => setChartRange(r)}
                     style={{
-                      background: chartRange === r ? 'transparent' : 'transparent',
+                      background: 'transparent',
                       color: chartRange === r ? 'var(--blue)' : 'var(--text-dim)',
                       border: chartRange === r ? '1px solid var(--blue)' : '1px solid var(--border)',
-                      borderRadius: 4,
-                      padding: '3px 8px',
-                      fontSize: 10,
-                      cursor: 'pointer',
-                      fontFamily: 'var(--mono)',
+                      borderRadius: 4, padding: '3px 8px', fontSize: 10,
+                      cursor: 'pointer', fontFamily: 'var(--mono)',
                     }}
                   >
                     {r}
@@ -504,7 +568,7 @@ export default function BotDetail() {
             <PnLChart height={120} />
           </div>
 
-          {/* Strategy Summary */}
+          {/* Strategy Settings */}
           <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
               Strategy Settings
@@ -532,49 +596,110 @@ export default function BotDetail() {
 
           {/* Controls */}
           <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {/* Pause toggle */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)' }}>
                 {bot.status === 'active' ? 'Bot is running' : 'Bot is paused'}
               </span>
-              <Toggle
-                checked={bot.status === 'active'}
-                onChange={handleToggle}
-              />
+              <Toggle checked={bot.status === 'active'} onChange={handleToggle} />
             </div>
-
             <div style={{ height: 1, background: 'var(--border)' }} />
-
-            {/* Delete */}
             <button
               onClick={handleDelete}
               style={{
                 background: 'transparent',
                 color: confirmDelete ? 'var(--red)' : 'var(--text-dim)',
                 border: `1px solid ${confirmDelete ? 'rgba(255,77,106,0.4)' : 'var(--border)'}`,
-                borderRadius: 6,
-                padding: '9px 16px',
-                fontSize: 13,
-                cursor: 'pointer',
-                fontFamily: 'var(--sans)',
-                width: '100%',
-                transition: 'all 0.15s',
+                borderRadius: 6, padding: '9px 16px', fontSize: 13,
+                cursor: 'pointer', fontFamily: 'var(--sans)', width: '100%', transition: 'all 0.15s',
               }}
             >
               {confirmDelete ? '⚠️ Confirm Delete' : '🗑 Delete Bot'}
-
             </button>
           </div>
-          <div style={{ padding: 20, paddingBottom: 20 }}></div>
+          <div style={{ padding: 20, paddingBottom: 20 }} />
         </div>
       </div>
 
-      {/* Audit results modal (#12) */}
+      {/* Edit SL/TP Modal */}
       <Modal
-        isOpen={showAuditModal}
-        onClose={() => setShowAuditModal(false)}
-        title={`AI Audit · ${bot.name}`}
+        isOpen={showEditModal}
+        onClose={() => { setShowEditModal(false); setEditError(''); }}
+        title="Edit Position · SL / TP"
       >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)',
+            padding: '8px 12px', background: 'var(--bg3)', borderRadius: 6, lineHeight: 1.6,
+          }}>
+            Entry: <span style={{ color: 'var(--text)' }}>${bot.filledEntry}</span>
+            &nbsp;·&nbsp;
+            Side: <span style={{ color: bot.side === 'long' ? 'var(--green)' : 'var(--red)', textTransform: 'uppercase' }}>{bot.side}</span>
+          </div>
+
+          <div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
+              Stop Loss
+            </div>
+            <input
+              type="number"
+              step="any"
+              value={editSL}
+              onChange={e => setEditSL(e.target.value)}
+              placeholder={bot.side === 'long' ? 'Below entry price' : 'Above entry price'}
+              style={inputStyle}
+            />
+          </div>
+
+          <div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
+              Take Profit
+            </div>
+            <input
+              type="number"
+              step="any"
+              value={editTP}
+              onChange={e => setEditTP(e.target.value)}
+              placeholder={bot.side === 'long' ? 'Above entry price' : 'Below entry price'}
+              style={inputStyle}
+            />
+          </div>
+
+          {editError && (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', lineHeight: 1.5 }}>
+              ⚠ {editError}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button
+              onClick={() => { setShowEditModal(false); setEditError(''); }}
+              style={{
+                flex: 1, background: 'transparent', color: 'var(--text-dim)',
+                border: '1px solid var(--border)', borderRadius: 6,
+                padding: '10px 0', fontSize: 13, cursor: 'pointer', fontFamily: 'var(--sans)',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSavePosition}
+              disabled={editSaving}
+              style={{
+                flex: 2,
+                background: editSaving ? 'var(--bg3)' : 'var(--blue)',
+                color: '#fff', border: 'none', borderRadius: 6,
+                padding: '10px 0', fontSize: 13, fontWeight: 600,
+                cursor: editSaving ? 'not-allowed' : 'pointer', fontFamily: 'var(--sans)',
+              }}
+            >
+              {editSaving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Audit results modal */}
+      <Modal isOpen={showAuditModal} onClose={() => setShowAuditModal(false)} title={`AI Audit · ${bot.name}`}>
         {auditing && (
           <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)', textAlign: 'center', padding: '20px 0' }}>
             // Reviewing this bot's history...
@@ -593,17 +718,50 @@ export default function BotDetail() {
                 {auditResult.overallAssessment}
               </div>
             )}
+            {auditResult.outlook && (
+              <div style={{
+                padding: '10px 12px',
+                background: 'rgba(27,111,248,0.06)',
+                border: '1px solid rgba(27,111,248,0.25)',
+                borderRadius: 6,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--blue)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    Outlook · Current Conditions
+                  </span>
+                  {auditResult.outlook.currentRiskLevel && (
+                    <span style={{
+                      fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                      color: severityColor[
+                        auditResult.outlook.currentRiskLevel === 'high' ? 'critical'
+                          : auditResult.outlook.currentRiskLevel === 'medium' ? 'warning'
+                          : 'info'
+                      ],
+                    }}>
+                      {auditResult.outlook.currentRiskLevel} risk
+                    </span>
+                  )}
+                </div>
+                {auditResult.outlook.likelyOutcome && (
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-mid)', lineHeight: 1.6, marginBottom: 6 }}>
+                    {auditResult.outlook.likelyOutcome}
+                  </div>
+                )}
+                {auditResult.outlook.suggestedAction && (
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+                    Suggested: {auditResult.outlook.suggestedAction}
+                  </div>
+                )}
+              </div>
+            )}
             {auditResult.flags?.length === 0 && (
               <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--green)' }}>✓ No issues found</div>
             )}
             {auditResult.flags?.map((flag, i) => (
-              <div
-                key={i}
-                style={{
-                  padding: '10px 12px', background: 'var(--bg3)', borderRadius: 6,
-                  borderLeft: `3px solid ${severityColor[flag.severity] || 'var(--blue)'}`,
-                }}
-              >
+              <div key={i} style={{
+                padding: '10px 12px', background: 'var(--bg3)', borderRadius: 6,
+                borderLeft: `3px solid ${severityColor[flag.severity] || 'var(--blue)'}`,
+              }}>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
                   {flag.issue}
                 </div>
@@ -616,12 +774,8 @@ export default function BotDetail() {
         )}
       </Modal>
 
-      {/* PnL card modal (#4) */}
-      <Modal
-        isOpen={showPnlModal}
-        onClose={() => setShowPnlModal(false)}
-        title="Shareable PnL Card"
-      >
+      {/* PnL card modal */}
+      <Modal isOpen={showPnlModal} onClose={() => setShowPnlModal(false)} title="Shareable PnL Card">
         <PnLCard bot={bot} isClosed={bot.position === 'closed'} />
       </Modal>
 

@@ -81,8 +81,5 @@ export const getRecentDecisions = ({ limit = 50, botId, walletAddress, type, sin
   return results.slice(0, limit);
 };
 
-/**
- * Get all log entries for a specific bot (used by auditing, #12).
- */
 export const getBotDecisionHistory = (botId) =>
   log.filter((e) => e.botId === botId).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));

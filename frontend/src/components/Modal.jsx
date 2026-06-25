@@ -1,11 +1,4 @@
-/**
- * Simple blurred-backdrop modal. Click outside or the close button to dismiss.
- * Used by TradeHistory.jsx to show audit results and the downloadable PnL
- * card without them competing for space with the floating DecisionConsole
- * icon or the page's own layout (the original problem: inline expansion
- * pushed table rows around and collided with the mobile tab bar / console
- * button).
- */
+
 export default function Modal({ isOpen, onClose, title, children }) {
   if (!isOpen) return null;
 

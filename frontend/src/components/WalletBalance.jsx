@@ -31,15 +31,12 @@ export default function WalletBalance({ bots = [] }) {
   const balance = wallet?.balance ?? 10000;
   const startingBalance = 10000;
 
-  // Unrealized P&L from open positions (live, from bot data)
   const unrealizedPnl = bots
     .filter(b => b.position === 'open')
     .reduce((acc, b) => acc + (b.unrealizedPnl || 0), 0);
 
-  // Realized all-time P&L from server (persists across closes and restarts)
   const realizedPnl = wallet?.totalPnl ?? 0;
 
-  // Total = all-time realized + current unrealized
   const totalPnl = realizedPnl + unrealizedPnl;
   const totalPnlPercent = (totalPnl / startingBalance) * 100;
 

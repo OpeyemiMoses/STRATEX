@@ -107,18 +107,42 @@ export default function CreateStrategy() {
     const lower = answer.toLowerCase();
     const num = parseFloat(answer.replace(/[^0-9.]/g, ''));
 
+    // Whether this is a short position — determines direction of TP/SL offsets
+    const isShort = parsed.action === 'sell';
+
     if (field === 'takeProfitPrice' || field === 'stopLossPrice') {
       const isPercentOffset = /%/.test(answer) && /(above|below)\s*entry/.test(lower);
+
       if (isPercentOffset && referencePrice) {
-        const isBelow = /below/.test(lower);
-        const sign = isBelow ? -1 : 1;
+        // For longs:  TP is above entry (+), SL is below entry (-)
+        // For shorts: TP is below entry (-), SL is above entry (+)
+        const isAbove = /above/.test(lower);
+
+        let sign;
+        if (field === 'takeProfitPrice') {
+          // Short TP → below entry; Long TP → above entry
+          sign = isShort ? -1 : 1;
+        } else {
+          // Short SL → above entry; Long SL → below entry
+          sign = isShort ? 1 : -1;
+        }
+
         updatedParsed[field] = parseFloat((referencePrice * (1 + (sign * num) / 100)).toFixed(4));
       } else if (/specific price|set a/.test(lower)) {
         updatedParsed[field] = null;
       } else if (!isNaN(num)) {
-        updatedParsed[field] = /%/.test(answer) && referencePrice
-          ? parseFloat((referencePrice * (1 + num / 100)).toFixed(4))
-          : num;
+        if (/%/.test(answer) && referencePrice) {
+          // Plain "X%" answer with no above/below — infer direction from field + side
+          let sign;
+          if (field === 'takeProfitPrice') {
+            sign = isShort ? -1 : 1;
+          } else {
+            sign = isShort ? 1 : -1;
+          }
+          updatedParsed[field] = parseFloat((referencePrice * (1 + (sign * num) / 100)).toFixed(4));
+        } else {
+          updatedParsed[field] = num;
+        }
       } else {
         updatedParsed[field] = answer;
       }
@@ -164,9 +188,6 @@ export default function CreateStrategy() {
       const data = await res.json();
       setAnalysis(data.analysis);
       setChosenStrategy('safer');
-      // Seed each card's edits from the original AI values — never touched again
-      // by card clicks or selection changes. This now includes "side" since
-      // the backend always returns it (echoed or flipped) on both strategies.
       setUserEdits(data.analysis.userStrategy);
       setSaferEdits(data.analysis.saferStrategy);
       setEditingStrategy(null);
@@ -182,19 +203,7 @@ export default function CreateStrategy() {
     if (!botName.trim()) { setError('Please give your bot a name.'); return; }
     setStep(STEPS.CREATING);
 
-    // Always use the per-card edits — they start as the original AI values
-    // and accumulate user changes independently per card
     const strategy = chosenStrategy === 'user' ? userEdits : saferEdits;
-
-    // FIX: side must come from the CHOSEN strategy, not from the original
-    // parsed text. Previously this always read parsed.action, so if the
-    // user picked the AI's "safer" version and that version recommended
-    // the opposite direction (e.g. user said "long", AI said "actually
-    // short is safer right now"), the bot still deployed as the original
-    // long — silently ignoring the AI's actual recommendation. Now it
-    // reads strategy.side first (set on both userStrategy and saferStrategy
-    // by the backend), and only falls back to parsed.action if that's
-    // somehow missing (defensive — backend already guarantees it).
     const resolvedSide = strategy.side === 'short' || strategy.side === 'long'
       ? strategy.side
       : (parsed.action === 'sell' ? 'short' : 'long');

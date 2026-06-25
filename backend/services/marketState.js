@@ -1,34 +1,31 @@
+import axios from 'axios';
 import { fetchHistoricalCandles } from './marketRegime.js';
 
-/**
- * Classifies the CURRENT market state for a pair -- as opposed to
- * marketRegime.js's getRegimeSegments(), which splits a long historical
- * window into past regimes for backtesting. This module answers a
- * different question: "what are conditions like RIGHT NOW, for the
- * purpose of deciding whether to deploy a new strategy on this pair?"
- *
- * Reuses the same underlying candle fetcher so both modules stay
- * consistent about what counts as "trending" vs "volatile" -- there is
- * exactly one definition of these terms in the codebase, not two that
- * could disagree with each other.
- */
+const RECENT_WINDOW_CANDLES = 48;
+const FUNDING_TICKER_URL = 'https://api.bitget.com/api/v2/mix/market/ticker';
+const PRODUCT_TYPE = 'USDT-FUTURES';
+const ELEVATED_FUNDING_THRESHOLD = 0.0005;
 
-const RECENT_WINDOW_CANDLES = 48; // ~2 days of 1h candles, ~48 hours of recent behavior
+const fetchFundingRate = async (symbol) => {
+  try {
+    const res = await axios.get(FUNDING_TICKER_URL, {
+      params: { symbol, productType: PRODUCT_TYPE },
+    });
+    const ticker = res.data?.data?.[0];
+    const rate = ticker ? parseFloat(ticker.fundingRate) : null;
+    return rate !== null && !isNaN(rate) ? rate : null;
+  } catch (err) {
+    console.error(`fetchFundingRate failed for ${symbol}:`, err.message);
+    return null;
+  }
+};
 
-/**
- * @param {string} symbol
- * @param {string} timeframe
- * @returns {Promise<{
- *   regime: string,
- *   regimeDisplay: string,
- *   stats: { netChangePercent, annualizedVolPercent, avgVolume, maxDrawdownPercent },
- *   liquidityFlag: 'normal' | 'low',
- *   currentPrice: number | null,
- * } | null>} null if no usable data could be fetched
- */
 export const getCurrentMarketState = async (symbol, timeframe = '1h') => {
-  const candles = await fetchHistoricalCandles(symbol, timeframe, RECENT_WINDOW_CANDLES);
-  if (candles.length < 10) return null; // not enough recent data to say anything meaningful
+  const [candles, fundingRate] = await Promise.all([
+    fetchHistoricalCandles(symbol, timeframe, RECENT_WINDOW_CANDLES),
+    fetchFundingRate(symbol),
+  ]);
+  if (candles.length < 10) return null;
 
   const closes = candles.map((c) => c.close);
   const first = closes[0];
@@ -42,7 +39,7 @@ export const getCurrentMarketState = async (symbol, timeframe = '1h') => {
   const meanReturn = returns.reduce((s, r) => s + r, 0) / returns.length;
   const variance = returns.reduce((s, r) => s + (r - meanReturn) ** 2, 0) / returns.length;
   const stdDev = Math.sqrt(variance);
-  const annualizedVolPercent = stdDev * Math.sqrt(365 * 24) * 100; // hourly-bar annualization
+  const annualizedVolPercent = stdDev * Math.sqrt(365 * 24) * 100;
 
   let peak = closes[0];
   let maxDrawdownPercent = 0;
@@ -53,9 +50,6 @@ export const getCurrentMarketState = async (symbol, timeframe = '1h') => {
   }
 
   const avgVolume = candles.reduce((s, c) => s + c.volume, 0) / candles.length;
-  // Compare this window's average volume to the most recent few candles --
-  // a simple, defensible "is liquidity drying up right now" signal rather
-  // than an absolute volume threshold that would need per-asset tuning.
   const recentVolume = candles.slice(-6).reduce((s, c) => s + c.volume, 0) / 6;
   const liquidityFlag = recentVolume < avgVolume * 0.4 ? 'low' : 'normal';
 
@@ -72,6 +66,13 @@ export const getCurrentMarketState = async (symbol, timeframe = '1h') => {
     high_volatility: 'Highly volatile',
   };
 
+  // Positive funding = longs pay shorts = market is crowded long.
+  // Negative funding = shorts pay longs = market is crowded short.
+  let fundingSignal = 'neutral';
+  if (fundingRate !== null && Math.abs(fundingRate) >= ELEVATED_FUNDING_THRESHOLD) {
+    fundingSignal = fundingRate > 0 ? 'crowded_long' : 'crowded_short';
+  }
+
   return {
     regime,
     regimeDisplay: REGIME_DISPLAY[regime],
@@ -83,25 +84,11 @@ export const getCurrentMarketState = async (symbol, timeframe = '1h') => {
     },
     liquidityFlag,
     currentPrice: last,
+    fundingRate,     // raw decimal fraction, e.g. -0.0007; null if unavailable
+    fundingSignal,   // 'neutral' | 'crowded_long' | 'crowded_short'
   };
 };
 
-/**
- * Decide whether a given strategy shape is well-matched to the current
- * regime, badly mismatched, or borderline -- used to drive the
- * trade/no-trade veto and the strategy explanation text.
- *
- * This is intentionally simple, rule-based logic (not another Qwen call)
- * for the structural mismatch checks, since "a tight scalp strategy makes
- * no sense in a dead-flat low-volatility market" is a deterministic fact
- * about the numbers, not something that benefits from an LLM's judgment --
- * keeping it rule-based also means this check is instant and free to run
- * on every parse, not gated behind an extra AI call's latency/cost.
- *
- * @param {Object} marketState - result from getCurrentMarketState
- * @param {Object} strategy - parsed strategy fields (entryPrice, takeProfitPrice, stopLossPrice, etc.)
- * @returns {{ mismatch: boolean, severity: 'none'|'mild'|'severe', reason: string|null }}
- */
 export const assessStrategyFit = (marketState, strategy) => {
   if (!marketState) {
     return { mismatch: false, severity: 'none', reason: null };
@@ -117,10 +104,6 @@ export const assessStrategyFit = (marketState, strategy) => {
     };
   }
 
-  // Tight-target check: if both TP and SL are within a very small % of
-  // current price, and the market is in a high-volatility regime, normal
-  // noise is likely to trigger an exit almost immediately regardless of
-  // direction -- a structural mismatch, not a matter of opinion.
   if (regime === 'high_volatility' && currentPrice) {
     const tp = strategy.takeProfitPrice;
     const sl = strategy.stopLossPrice;
@@ -137,8 +120,20 @@ export const assessStrategyFit = (marketState, strategy) => {
     }
   }
 
-  // Sideways market + a strongly directional, wide-target strategy: not
-  // dangerous, just statistically less likely to pay off until the range breaks.
+  const side = strategy.side || (strategy.action === 'sell' ? 'short' : 'long');
+  if (marketState.fundingSignal !== 'neutral') {
+    const crowdedSameSide =
+      (marketState.fundingSignal === 'crowded_long' && side === 'long') ||
+      (marketState.fundingSignal === 'crowded_short' && side === 'short');
+    if (crowdedSameSide) {
+      return {
+        mismatch: true,
+        severity: 'mild',
+        reason: `Funding rate on this pair is currently ${(marketState.fundingRate * 100).toFixed(3)}% per interval, indicating the market is crowded ${marketState.fundingSignal === 'crowded_long' ? 'long' : 'short'} -- the same side as this strategy. You'd be paying recurring funding to stay in the trade, and crowded positioning is statistically more exposed to a sharp squeeze if that crowd unwinds.`,
+      };
+    }
+  }
+
   if (regime === 'sideways') {
     const tp = strategy.takeProfitPrice;
     if (tp && currentPrice) {

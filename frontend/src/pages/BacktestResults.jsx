@@ -41,8 +41,6 @@ export default function BacktestResults() {
       emoji: settings.emoji,
       color: settings.color,
       pnl: 0,
-      // NOTE: was results?.metrics?.winRate -- the real backtest response no
-      // longer has a flat `metrics` object, it's `aggregateMetrics`.
       winRate: results?.aggregateMetrics?.winRate || 0,
       trades: 0,
     });
@@ -51,14 +49,7 @@ export default function BacktestResults() {
   };
 
   if (!results || !settings) return null;
-
-  // NOTE: the real backtest engine's response shape is different from the
-  // old mock -- there is no top-level `metrics`, `trades`, or `chartData`
-  // anymore. Aggregate numbers live in `aggregateMetrics`, and the real
-  // per-trade detail lives inside each entry of `regimes[]` (last 10 trades
-  // per regime, by design -- see backtest.js). There is also no single
-  // equity curve to chart here since performance is now reported per
-  // regime rather than as one continuous timeline.
+  
   const { aggregateMetrics, robustnessScore, verdict, regimes, startingBalance } = results;
 
   const thStyle = {

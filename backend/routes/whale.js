@@ -7,16 +7,14 @@ const BITGET = axios.create({
   baseURL: 'https://api.bitget.com',
 });
 
-// Symbols to monitor for large trades
 const WATCH_SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
   'AVAXUSDT', 'DOGEUSDT', 'ADAUSDT', 'MATICUSDT', 'SHIBUSDT',
 ];
 
-// Threshold: minimum USD value to qualify as a "whale" trade
-const WHALE_THRESHOLD_USD = 500_000; // $500k+
+const WHALE_THRESHOLD_USD = 500_000;
+const PRODUCT_TYPE = 'USDT-FUTURES';
 
-// Cache results for 60s — Bitget fills endpoint has a 20/1s rate limit
 let eventsCache = null;
 let eventsCacheTime = 0;
 
@@ -25,16 +23,15 @@ const getWhaleEvents = async () => {
 
   const allTrades = [];
 
-  // Fetch recent public fills for each watched symbol in parallel
+
   await Promise.allSettled(
     WATCH_SYMBOLS.map(async (symbol) => {
       try {
-        const { data } = await BITGET.get('/api/v2/spot/market/fills', {
-          params: { symbol, limit: 100 },
+        const { data } = await BITGET.get('/api/v2/mix/market/fills', {
+          params: { symbol, limit: 100, productType: PRODUCT_TYPE },
         });
         if (data.code !== '00000' || !Array.isArray(data.data)) return;
 
-        // Get current price from the first fill to compute USD value
         const fills = data.data;
         if (!fills.length) return;
 
@@ -42,7 +39,7 @@ const getWhaleEvents = async () => {
 
         for (const fill of fills) {
           const price = parseFloat(fill.price);
-          const size = parseFloat(fill.size);   // base coin amount
+          const size = parseFloat(fill.size);
           const usdValue = price * size;
 
           if (usdValue < WHALE_THRESHOLD_USD) continue;
@@ -51,7 +48,7 @@ const getWhaleEvents = async () => {
             id: fill.tradeId,
             symbol,
             base,
-            side: fill.side,   // 'buy' | 'sell'
+            side: fill.side,
             price,
             size,
             usdValue,
@@ -64,11 +61,9 @@ const getWhaleEvents = async () => {
     })
   );
 
-  // Sort by USD value descending, take top 10
   allTrades.sort((a, b) => b.usdValue - a.usdValue);
   const top = allTrades.slice(0, 10);
 
-  // Format for frontend
   const events = top.map((t, i) => {
     const isBuy = t.side === 'buy';
     const usdFormatted = t.usdValue >= 1_000_000
@@ -106,7 +101,6 @@ const getWhaleEvents = async () => {
     };
   });
 
-  // Fallback: if Bitget returns nothing large enough, show a "quiet market" message
   eventsCache = events.length > 0 ? events : [];
   eventsCacheTime = Date.now();
   return eventsCache;

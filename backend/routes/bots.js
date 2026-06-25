@@ -11,6 +11,7 @@ import { calculateLiquidationPrice, calculateLeveragedPnl } from '../services/le
 import { computeConfidenceRating } from '../services/confidenceRating.js';
 import { auditBot } from '../services/botAuditor.js';
 import { auditWallet } from '../services/walletAuditor.js';
+import { clampLeverage } from '../services/contractConfig.js';
 
 dotenv.config();
 
@@ -39,7 +40,6 @@ const bitgetHeaders = (method, path, body = '') => {
   };
 };
 
-// Bot store — persisted to disk, loaded on startup
 const loadBots = () => {
   try {
     if (fs.existsSync(DATA_FILE)) {
@@ -72,7 +72,7 @@ export const setBots = (newBots) => {
 // Get all bots for a specific wallet
 router.get('/', (req, res) => {
   const { wallet } = req.query;
-  if (!wallet) return res.json(bots); // fallback: return all if no wallet specified
+  if (!wallet) return res.json(bots);
   const filtered = bots.filter(b => b.walletAddress === wallet);
   res.json(filtered);
 });
@@ -89,11 +89,9 @@ router.get('/history/:address', (req, res) => {
   res.json(history);
 });
 
-// NEW (#11): audit a wallet's full trading performance for cross-trade patterns
 router.post('/wallet/:address/audit', async (req, res) => {
   const { address } = req.params;
   const activeBotsForWallet = bots.filter((b) => b.walletAddress === address);
-
   try {
     const result = await auditWallet(address, activeBotsForWallet);
     res.json(result);
@@ -103,7 +101,6 @@ router.post('/wallet/:address/audit', async (req, res) => {
   }
 });
 
-// Manually close an open position — take current profit/loss now
 router.post('/:id/close', async (req, res) => {
   console.log('[CLOSE DEBUG] requested id:', req.params.id);
   console.log('[CLOSE DEBUG] available ids:', bots.map(b => b.id));
@@ -114,8 +111,9 @@ router.post('/:id/close', async (req, res) => {
   }
 
   try {
-    const pricePath = `/api/v2/spot/market/tickers?symbol=${bot.asset}`;
-    const priceRes = await axios.get(`https://api.bitget.com${pricePath}`);
+    const priceRes = await axios.get('https://api.bitget.com/api/v2/mix/market/ticker', {
+      params: { symbol: bot.asset, productType: 'USDT-FUTURES' },
+    });
     const price = parseFloat(priceRes.data?.data?.[0]?.lastPr);
 
     if (!price) {
@@ -123,16 +121,14 @@ router.post('/:id/close', async (req, res) => {
     }
 
     const isShort = bot.side === 'short';
-    // NEW (#3 leverage): manual close now uses the same leveraged P&L math as
-    // the simulator. At leverage 1 (or undefined, for bots created before #3)
-    // this produces identical numbers to the original plain calculation —
-    // fully backward-compatible.
     const { pnl: dollarPnl, pnlPercent } = calculateLeveragedPnl(
       bot.filledEntry, price, bot.side, bot.positionValueUSDT, bot.leverage || 1
     );
 
     const returnedAmount = bot.positionValueUSDT + dollarPnl;
-    addBalance(bot.walletAddress, returnedAmount);
+
+
+    addBalance(bot.walletAddress, returnedAmount, dollarPnl);
 
     bot.position = 'closed';
     bot.pnl = (bot.pnl || 0) + dollarPnl;
@@ -154,10 +150,10 @@ router.post('/:id/close', async (req, res) => {
       timestamp: new Date().toISOString(),
       side: isShort ? 'Cover' : 'Sell',
       price: price.toFixed(2),
-      quantity: bot.quantity, // same units bought at entry
+      quantity: bot.quantity,
       size: bot.positionSize ? `${bot.positionSize}%` : '—',
       pnl: `${dollarPnl >= 0 ? '+' : ''}$${dollarPnl.toFixed(2)} (${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%)`,
-      balanceChange: bot.positionValueUSDT + dollarPnl, // margin + leveraged P&L returned to the wallet
+      balanceChange: bot.positionValueUSDT + dollarPnl,
       type: 'manual-close',
     });
     archiveBot(bot);
@@ -170,7 +166,7 @@ router.post('/:id/close', async (req, res) => {
   }
 });
 
-// NEW (#12): audit a single bot — checks active bots first, then archived history
+// Audit a single bot
 router.post('/:id/audit', async (req, res) => {
   let bot = bots.find((b) => b.id === req.params.id);
 
@@ -208,6 +204,65 @@ router.post('/:id/audit', async (req, res) => {
   }
 });
 
+
+router.patch('/:id/position', (req, res) => {
+  const bot = bots.find(b => b.id === req.params.id);
+  if (!bot) return res.status(404).json({ error: 'Bot not found' });
+  if (bot.position !== 'open') {
+    return res.status(400).json({ error: 'Can only edit an open position' });
+  }
+
+  const { stopLoss, takeProfit } = req.body;
+
+  if (stopLoss === undefined && takeProfit === undefined) {
+    return res.status(400).json({ error: 'Provide stopLoss or takeProfit to update' });
+  }
+
+  const oldSL = bot.stopLoss;
+  const oldTP = bot.takeProfit;
+
+  if (stopLoss !== undefined) {
+    const sl = parseFloat(stopLoss);
+    if (isNaN(sl) || sl <= 0) return res.status(400).json({ error: 'Invalid stopLoss value' });
+    bot.stopLoss = sl;
+  }
+
+  if (takeProfit !== undefined) {
+    const tp = parseFloat(takeProfit);
+    if (isNaN(tp) || tp <= 0) return res.status(400).json({ error: 'Invalid takeProfit value' });
+    bot.takeProfit = tp;
+  }
+
+  bot.tradelog = bot.tradelog || [];
+  bot.tradelog.unshift({
+    time: new Date().toLocaleString('en-US', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    }),
+    timestamp: new Date().toISOString(),
+    side: 'Edit',
+    price: bot.lastPrice ? String(bot.lastPrice) : '—',
+    quantity: null,
+    size: '—',
+    pnl: `SL: $${bot.stopLoss} · TP: $${bot.takeProfit}`,
+    balanceChange: null,
+    type: 'position-edit',
+  });
+
+  bot.slTpAdjustmentHistory = bot.slTpAdjustmentHistory || [];
+  bot.slTpAdjustmentHistory.push({
+    timestamp: new Date().toISOString(),
+    source: 'user_edit',
+    price: bot.lastPrice || null,
+    oldStopLoss: oldSL,
+    newStopLoss: bot.stopLoss,
+    oldTakeProfit: oldTP,
+    newTakeProfit: bot.takeProfit,
+  });
+
+  saveBots();
+  res.json(bot);
+});
+
 // Create a new bot
 router.post('/create', async (req, res) => {
   const {
@@ -216,32 +271,19 @@ router.post('/create', async (req, res) => {
     leverage,
   } = req.body;
 
-  // --- Mandatory risk layer (Section 3, #6) ---
-  // The AI should never generate -- and the server should never accept --
-  // a bot with no stop-loss, no take-profit, or no position sizing. This is
-  // a hard server-side check, not just a UI nicety from the clarifying
-  // chat: even a request that bypasses the normal flow entirely cannot
-  // create a bot without these.
   if (!stopLoss || !takeProfit || !positionSize) {
     return res.status(400).json({
       error: 'A stop-loss, take-profit, and position size are all required to create a bot. Stratex does not deploy bots without basic risk controls.',
     });
   }
 
-  const lev = leverage && leverage > 1 ? parseFloat(leverage) : 1;
+  const requestedLeverage = leverage && leverage > 1 ? parseFloat(leverage) : 1;
   const parsedEntryPrice = entryPrice ? parseFloat(entryPrice) : null;
   const resolvedSide = side === 'short' ? 'short' : 'long';
 
-  // --- Confidence rating (Section 3, #6) ---
-  // Run the real multi-regime backtest against this exact strategy BEFORE
-  // it becomes a live bot, using the same engine the standalone backtest
-  // route uses. This is what replaces a generic "Generated bot
-  // successfully" message with an actual robustness score, risk level,
-  // overfitting risk, and market-adaptability rating -- computed from real
-  // historical replay, not invented. If this fails (e.g. no historical
-  // data for an obscure pair), the bot still gets created -- a missing
-  // confidence rating should not block deployment entirely, it should
-  // just be flagged as unavailable.
+  const leverageResult = await clampLeverage(asset, requestedLeverage);
+  const lev = leverageResult.leverage;
+
   let confidenceRating = null;
   try {
     confidenceRating = await computeConfidenceRating(
@@ -275,7 +317,7 @@ router.post('/create', async (req, res) => {
     takeProfit: takeProfit ? parseFloat(takeProfit) : null,
     positionSize,
     backtestResults,
-    confidenceRating, // NEW (Section 3) -- robustness score, risk level, overfitting risk, market adaptability, explanation
+    confidenceRating,
     status: 'active',
     position: 'pending',
     filledEntry: null,
@@ -286,14 +328,14 @@ router.post('/create', async (req, res) => {
     trades: 0,
     createdAt: new Date().toISOString(),
     color: '#1B6FF8',
-    // NEW (#3) — leverage fields. liquidationPrice is null for limit orders
-    // until simulator.js fills the entry and recomputes it against the actual
-    // fill price (market orders have no entryPrice yet, so it can't be
-    // computed here regardless).
     leverage: lev,
+    leverageCapped: leverageResult.capped,
+    requestedLeverage: leverageResult.requestedLeverage,
+    maxAllowedLeverage: leverageResult.maxAllowedLeverage,
     liquidationPrice: parsedEntryPrice
       ? calculateLiquidationPrice(parsedEntryPrice, resolvedSide, lev)
       : null,
+    originalAction: side === 'short' ? 'sell' : 'buy',
   };
 
   bots.unshift(newBot);
