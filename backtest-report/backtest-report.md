@@ -82,4 +82,3 @@ node scripts/export-backtest-report.js
 | Bear market | +0.22% | 57.7% | -0.07% | 97 |
 
 ---
-
