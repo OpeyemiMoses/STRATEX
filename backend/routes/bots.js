@@ -179,6 +179,8 @@ router.post('/:id/audit', async (req, res) => {
         asset: archived.asset,
         walletAddress: archived.walletAddress,
         strategy: archived.strategy,
+        side: archived.side,
+        leverage: archived.leverage,
         entryType: archived.entryType,
         entryPrice: archived.entryPrice,
         filledEntry: archived.filledEntry,
@@ -189,6 +191,9 @@ router.post('/:id/audit', async (req, res) => {
         pnl: archived.finalPnl,
         pnlPercent: archived.finalPnlPercent,
         tradelog: archived.tradelog,
+        openedWith: archived.openedWith,
+        slTpAdjustmentHistory: archived.slTpAdjustmentHistory,
+        strategySource: archived.strategySource,
       };
     }
   }
@@ -268,7 +273,7 @@ router.post('/create', async (req, res) => {
   const {
     name, asset, timeframe, strategy, side, stopLoss, takeProfit,
     positionSize, entryPrice, entryType, walletAddress, backtestResults,
-    leverage,
+    leverage, strategyChoice, strategyEdited,
   } = req.body;
 
   if (!stopLoss || !takeProfit || !positionSize) {
@@ -312,7 +317,7 @@ router.post('/create', async (req, res) => {
     side: resolvedSide,
     walletAddress: walletAddress || 'anonymous',
     entryPrice: parsedEntryPrice,
-    entryType: entryType || 'limit',
+    entryType: entryType || 'market',
     stopLoss: stopLoss ? parseFloat(stopLoss) : null,
     takeProfit: takeProfit ? parseFloat(takeProfit) : null,
     positionSize,
@@ -336,6 +341,10 @@ router.post('/create', async (req, res) => {
       ? calculateLiquidationPrice(parsedEntryPrice, resolvedSide, lev)
       : null,
     originalAction: side === 'short' ? 'sell' : 'buy',
+    strategySource: {
+      choice: strategyChoice === 'user' ? 'user' : 'safer',
+      edited: !!strategyEdited,
+    },
   };
 
   bots.unshift(newBot);

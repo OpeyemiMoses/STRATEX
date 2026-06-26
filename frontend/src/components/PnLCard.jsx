@@ -10,6 +10,8 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 const CANVAS_WIDTH = 1024;
 const CANVAS_HEIGHT = 576;
+const MODAL_CHROME_ALLOWANCE = 220;
+const MIN_SCALE = 0.4;
 
 export default function PnLCard({ bot, isClosed = false }) {
   const cardRef = useRef(null);
@@ -23,7 +25,12 @@ export default function PnLCard({ bot, isClosed = false }) {
     const updateScale = () => {
       if (!wrapperRef.current) return;
       const availableWidth = wrapperRef.current.offsetWidth;
-      setScale(Math.min(1, availableWidth / CANVAS_WIDTH));
+      const availableHeight = window.innerHeight * 0.9 - MODAL_CHROME_ALLOWANCE;
+
+      const widthScale = availableWidth / CANVAS_WIDTH;
+      const heightScale = availableHeight / CANVAS_HEIGHT;
+
+      setScale(Math.max(MIN_SCALE, Math.min(1, widthScale, heightScale)));
     };
     updateScale();
     window.addEventListener('resize', updateScale);

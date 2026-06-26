@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, '../data/decision-log.json');
-const MAX_ENTRIES = 2000; // cap to keep the JSON file and /recent payloads bounded
+const MAX_ENTRIES = 2000;
 
 const loadLog = () => {
   try {
@@ -31,12 +31,12 @@ const saveLog = () => {
  * Append a decision/reasoning entry to the log.
  *
  * @param {Object} entry
- * @param {string} entry.type - one of: 'sl_tp_adjustment' | 'risk_assessment' | 'audit_flag' | 'general'
- * @param {string|null} entry.botId - the bot this relates to, or null for wallet-level entries
+ * @param {string} entry.type          - 'sl_tp_adjustment' | 'risk_assessment' | 'audit_flag' | 'general'
+ * @param {string|null} entry.botId   - bot this relates to, or null for wallet-level entries
  * @param {string|null} entry.walletAddress - wallet this relates to, if applicable
- * @param {string} entry.reasoning - plain-English explanation, written for display in the console UI
- * @param {Object} [entry.data] - structured payload (e.g. { oldSL, newSL, oldTP, newTP, price })
- * @param {string} [entry.severity] - for audit_flag entries: 'info' | 'warning' | 'critical'
+ * @param {string} entry.reasoning    - plain-English explanation shown in the console UI
+ * @param {Object} [entry.data]       - structured payload (e.g. { oldSL, newSL, oldTP, newTP, price })
+ * @param {string} [entry.severity]   - 'info' | 'warning' | 'critical'
  */
 export const logDecision = ({ type, botId = null, walletAddress = null, reasoning, data = {}, severity = 'info' }) => {
   const entry = {
@@ -54,7 +54,6 @@ export const logDecision = ({ type, botId = null, walletAddress = null, reasonin
   if (log.length > MAX_ENTRIES) log = log.slice(0, MAX_ENTRIES);
   saveLog();
 
-  // Mirror to server console too, so it shows up in Render logs during the demo
   console.log(`[DECISION-LOG] ${type}${botId ? ` bot=${botId}` : ''} — ${reasoning}`);
 
   return entry;
@@ -62,24 +61,36 @@ export const logDecision = ({ type, botId = null, walletAddress = null, reasonin
 
 /**
  * Get recent entries, optionally filtered.
+ *
  * @param {Object} opts
  * @param {number} [opts.limit=50]
- * @param {string} [opts.botId] - filter to a specific bot
- * @param {string} [opts.walletAddress] - filter to a specific wallet
- * @param {string} [opts.type] - filter to a specific entry type
- * @param {string} [opts.since] - ISO timestamp; only entries after this
+ * @param {string} [opts.botId]          - filter to a specific bot
+ * @param {string} [opts.walletAddress]  - filter to a specific wallet
+ * @param {string} [opts.type]           - filter to a specific entry type
+ * @param {string} [opts.since]          - ISO timestamp; only entries after this
  */
 export const getRecentDecisions = ({ limit = 50, botId, walletAddress, type, since } = {}) => {
   let results = log;
-  if (botId) results = results.filter((e) => e.botId === botId);
-  if (walletAddress) results = results.filter((e) => e.walletAddress === walletAddress);
-  if (type) results = results.filter((e) => e.type === type);
+  if (botId) results = results.filter(e => e.botId === botId);
+  if (walletAddress) results = results.filter(e => e.walletAddress === walletAddress);
+  if (type) results = results.filter(e => e.type === type);
   if (since) {
     const sinceTime = new Date(since).getTime();
-    results = results.filter((e) => new Date(e.timestamp).getTime() > sinceTime);
+    results = results.filter(e => new Date(e.timestamp).getTime() > sinceTime);
   }
   return results.slice(0, limit);
 };
 
 export const getBotDecisionHistory = (botId) =>
-  log.filter((e) => e.botId === botId).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  log.filter(e => e.botId === botId).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+/**
+ * Remove all log entries belonging to a wallet.
+ * Called by DELETE /api/decisions/clear?wallet=...
+ *
+ * @param {string} walletAddress
+ */
+export const clearWalletDecisions = (walletAddress) => {
+  log = log.filter(e => e.walletAddress !== walletAddress);
+  saveLog();
+};

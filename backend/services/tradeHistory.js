@@ -28,7 +28,6 @@ const saveHistory = () => {
   }
 };
 
-// Archive a bot's full trade record before it gets deleted
 export const archiveBot = (bot) => {
   history.unshift({
     index: history.length + 1,
@@ -45,7 +44,7 @@ export const archiveBot = (bot) => {
     stopLoss: bot.stopLoss,
     positionSize: bot.positionSize,
     positionValueUSDT: bot.positionValueUSDT,
-    quantity: bot.quantity || null, // units of the base asset -- null for bots archived before this field existed
+    quantity: bot.quantity || null, 
     leverage: bot.leverage || 1,
     liquidationPrice: bot.liquidationPrice || null,
     finalPnl: bot.pnl,
@@ -55,6 +54,9 @@ export const archiveBot = (bot) => {
     createdAt: bot.createdAt,
     closedAt: bot.closedAt || new Date().toISOString(),
     archivedAt: new Date().toISOString(),
+    openedWith: bot.openedWith || null,
+    slTpAdjustmentHistory: bot.slTpAdjustmentHistory || [],
+    strategySource: bot.strategySource || null,
   });
   saveHistory();
 };

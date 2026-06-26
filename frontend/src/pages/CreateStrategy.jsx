@@ -72,7 +72,7 @@ export default function CreateStrategy() {
         await runAnalysis(p);
       }
     } catch (err) {
-      setError('Failed to parse strategy. Please try again.');
+      setError('Failed to parse strategy. Please try again. ');
       setStep(STEPS.INPUT);
     }
   };
@@ -194,7 +194,7 @@ export default function CreateStrategy() {
       setDismissWarning(false); // reset so a fresh analysis always shows the warning if applicable
       setStep(STEPS.REVIEW);
     } catch (err) {
-      setError('Failed to analyse strategy. Please try again.');
+      setError('Failed to Analyse strategy (hackathon.bitgetops.com - overloaded). Please try again.');
       setStep(STEPS.INPUT);
     }
   };
@@ -204,9 +204,41 @@ export default function CreateStrategy() {
     setStep(STEPS.CREATING);
 
     const strategy = chosenStrategy === 'user' ? userEdits : saferEdits;
+    // The pristine AI-proposed values for the chosen card, before any manual
+    // edits — used below to detect whether the user changed anything.
+    const original = chosenStrategy === 'user' ? analysis.userStrategy : analysis.saferStrategy;
+
     const resolvedSide = strategy.side === 'short' || strategy.side === 'long'
       ? strategy.side
       : (parsed.action === 'sell' ? 'short' : 'long');
+
+    // FIX: resolve entryType from the CHOSEN strategy (post-edit, post-AI-choice)
+    // — never from parsed.entryType, which only reflects the original free-text
+    // parse and goes stale the moment the AI recommends a different order type
+    // (e.g. you choosing a limit-order safer version). /analyse now sets
+    // entryType per-card; this is a defensive fallback only in case that's
+    // ever missing.
+    const resolveEntryType = () => {
+      if (strategy.entryType === 'market' || strategy.entryType === 'limit') return strategy.entryType;
+      const refPrice = analysis?.marketState?.currentPrice ?? parsed?.livePrice;
+      const entryPx = parseFloat(strategy.entryPrice);
+      if (refPrice && !isNaN(entryPx)) {
+        const diffPercent = Math.abs((entryPx - refPrice) / refPrice) * 100;
+        return diffPercent < 0.3 ? 'market' : 'limit';
+      }
+      return parsed.entryType || 'market';
+    };
+
+    // Did the user manually change any field away from what the AI proposed
+    // for the chosen strategy? The backend stores this so risk monitoring,
+    // decision logging, and audits always know the real basis for this
+    // position — "AI's safer pick, taken as-is" vs "AI's safer pick, then
+    // hand-edited" vs "user's own version".
+    const wasEdited = (() => {
+      if (!original) return false;
+      const keys = ['entryPrice', 'takeProfitPrice', 'stopLossPrice', 'positionSizePercent', 'leverage', 'side', 'entryType'];
+      return keys.some(k => String(strategy[k] ?? '') !== String(original[k] ?? ''));
+    })();
 
     const botPayload = {
       name: botName,
@@ -215,12 +247,14 @@ export default function CreateStrategy() {
       timeframe: parsed.timeframe || '1h',
       side: resolvedSide,
       entryPrice: strategy.entryPrice,
-      entryType: parsed.entryType || 'limit',
+      entryType: resolveEntryType(),
       takeProfit: strategy.takeProfitPrice,
       stopLoss: strategy.stopLossPrice,
       positionSize: strategy.positionSizePercent,
       walletAddress: address,
       leverage: parseFloat(strategy.leverage ?? parsed.leverage ?? 1) || 1,
+      strategyChoice: chosenStrategy,
+      strategyEdited: wasEdited,
     };
 
     try {
@@ -494,12 +528,10 @@ export default function CreateStrategy() {
             </div>
           )}
 
-          {/* NEW — direction-flip alert. Distinct from the "don't trade now"
-              warning below: this fires whenever the AI's safer version
-              recommends the OPPOSITE side from the user's own version,
-              regardless of shouldTradeNow. This is the exact scenario that
-              caused the bug — surfacing it loudly here means it's seen
-              before deployment, not discovered after. */}
+          {/* Direction-flip alert. Distinct from the "don't trade now" warning
+              below: this fires whenever the AI's safer version recommends the
+              OPPOSITE side from the user's own version, regardless of
+              shouldTradeNow. */}
           {sideConflict && (
             <div style={{
               display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12,
@@ -592,10 +624,8 @@ export default function CreateStrategy() {
                     )}
                   </div>
 
-                  {/* NEW — explicit side badge so direction is never silently
-                      hidden inside an entry/TP/SL price comparison. This is
-                      the whole point of the fix: you should never have to
-                      guess which direction a card will deploy as. */}
+                  {/* Explicit side badge so direction is never silently
+                      hidden inside an entry/TP/SL price comparison. */}
                   {cardSide && (
                     <div style={{
                       display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -607,6 +637,24 @@ export default function CreateStrategy() {
                       border: `1px solid ${cardSide === 'short' ? 'rgba(255,77,106,0.3)' : 'rgba(0,214,143,0.3)'}`,
                     }}>
                       {cardSide === 'short' ? '▼ Short' : '▲ Long'}
+                    </div>
+                  )}
+
+                  {/* Explicit order-type badge — same reasoning as the side
+                      badge above: direction AND fill type both need to be
+                      visible up front, not just implied by an entry price
+                      number, since this is exactly what gets deployed. */}
+                  {(edits.entryType ?? s.entryType) && (
+                    <div style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      marginBottom: 12, marginLeft: 8, padding: '3px 9px', borderRadius: 5,
+                      fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 700,
+                      textTransform: 'uppercase', letterSpacing: '0.05em',
+                      color: 'var(--text-mid)',
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid var(--border)',
+                    }}>
+                      {(edits.entryType ?? s.entryType) === 'limit' ? '⏳ Limit' : '⚡ Market'}
                     </div>
                   )}
 
@@ -729,7 +777,8 @@ export default function CreateStrategy() {
             </button>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', marginTop: 8, textAlign: 'center' }}>
               Using {chosenStrategy === 'user' ? 'your' : "AI's safer"} strategy
-              {' '}({(chosenStrategy === 'user' ? userEdits.side : saferEdits.side) === 'short' ? 'Short' : 'Long'})
+              {' '}({(chosenStrategy === 'user' ? userEdits.side : saferEdits.side) === 'short' ? 'Short' : 'Long'}
+              {' · '}{(chosenStrategy === 'user' ? userEdits.entryType : saferEdits.entryType) === 'limit' ? 'Limit' : 'Market'})
             </div>
           </div>
         </div>

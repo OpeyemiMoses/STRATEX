@@ -8,7 +8,7 @@ const QWEN_API_KEY = process.env.QWEN_API_KEY;
 /**
  * Ask Qwen to review a bot's full history (trade log + every risk/adjustment
  * decision made along the way) and flag anything it considers a mistake or
- * risk-management weakness — now grounded against REAL current market
+ * risk-management weakness — grounded against REAL current market
  * conditions, not just the bot's own internal history in isolation.
  *
  * For OPEN positions, this also asks Qwen to assess what is likely to
@@ -28,11 +28,6 @@ export const auditBot = async (bot) => {
   const decisionHistory = getBotDecisionHistory(bot.id);
   const isOpen = bot.status !== 'closed' && bot.position === 'open';
 
-  // Fetch real current market state for this asset — same source of truth
-  // used during bot creation (Section 3), the strategy analyser, and
-  // riskMonitor's position re-evaluation. Without this, the audit can only
-  // judge a bot against its own past reasoning, never against what's
-  // actually true about the market today.
   let marketState = null;
   try {
     marketState = await getCurrentMarketState(bot.asset, bot.timeframe || '1h');
@@ -48,6 +43,21 @@ REAL CURRENT MARKET CONDITIONS for ${bot.asset} (most recent ~48 hours, fetched 
 - Liquidity: ${marketState.liquidityFlag === 'low' ? 'LOW — recent volume has dropped sharply' : 'normal'}
 - Current price: ${marketState.currentPrice}` : `
 No live market data was available for ${bot.asset} — base the audit on the bot's own history alone, and mention this limitation in your overall assessment.`;
+  const effectiveEntryPrice = bot.filledEntry ?? bot.entryPrice;
+
+  const baseline = bot.openedWith || null;
+  const autoAdjustCount = bot.slTpAdjustmentHistory?.filter(h => h.source === 'ai_auto').length || 0;
+  const userEditCount = bot.slTpAdjustmentHistory?.filter(h => h.source === 'user_edit').length || 0;
+  const baselineBlock = baseline ? `
+ORIGINALLY OPENED WITH (the actual filled position, locked in at entry — treat this as ground truth
+for what this trade started as, regardless of anything adjusted since):
+- Filled entry: ${baseline.filledEntry}
+- Stop-loss: ${baseline.stopLoss}, Take-profit: ${baseline.takeProfit}
+- Leverage: ${baseline.leverage}x, Position size: ${baseline.positionSize}%
+${baseline.strategySource ? `- Strategy used: the trader's chosen ${baseline.strategySource.choice === 'safer' ? 'AI safer version' : "own version"}${baseline.strategySource.edited ? ' (manually edited before deployment)' : ' (deployed as-is, unedited)'}` : ''}
+${autoAdjustCount > 0 || userEditCount > 0
+    ? `Since opening, SL/TP has changed ${autoAdjustCount} time${autoAdjustCount === 1 ? '' : 's'} via AI auto-adjustment and ${userEditCount} time${userEditCount === 1 ? '' : 's'} via manual user edit. The current stop-loss/take-profit in the BOT CONFIG above reflect the LATEST state, not the original.`
+    : 'SL/TP has not been adjusted since opening — current values in BOT CONFIG match the original.'}` : '';
 
   const outlookInstructions = isOpen ? `
 This position is currently OPEN. In addition to the retrospective audit, use the real current market
@@ -66,7 +76,7 @@ catches real issues, not if it rubber-stamps everything as fine.
 
 BOT CONFIG:
 - Asset: ${bot.asset}, Side: ${bot.side}, Strategy: ${bot.strategy}
-- Entry type: ${bot.entryType}, Entry price: ${bot.entryPrice ?? bot.filledEntry}
+- Entry type: ${bot.entryType}, Entry price: ${effectiveEntryPrice}
 - Leverage: ${bot.leverage || 1}x (FIXED for the life of this position — futures leverage cannot be
   changed once a position is open. If leverage was a poor choice, frame that as a lesson for how
   future bots should be configured, never as a change to propose for THIS bot.)
@@ -74,13 +84,15 @@ BOT CONFIG:
 ${bot.liquidationPrice ? `- Liquidation price: ${bot.liquidationPrice} (fixed by entry + leverage, cannot move)` : ''}
 - Position size: ${bot.positionSize}% of wallet
 - Status: ${bot.status}, Position: ${bot.position}, Final/Current P&L: ${bot.pnl ?? 'still open'} (${bot.pnlPercent ?? 'n/a'}%)
+${baselineBlock}
 ${marketBlock}
 ${outlookInstructions}
 
 TRADE LOG:
 ${JSON.stringify(bot.tradelog || [], null, 2)}
 
-RISK/ADJUSTMENT DECISION HISTORY (every time the system re-evaluated this position):
+RISK/ADJUSTMENT DECISION HISTORY (every time the system re-evaluated this position, including any
+autonomous SL/TP adjustments it made):
 ${JSON.stringify(decisionHistory.map((d) => ({ type: d.type, reasoning: d.reasoning, data: d.data })), null, 2)}
 
 Respond ONLY in JSON, no preamble, no markdown:
@@ -122,8 +134,6 @@ If you find no real issues, return an empty flags array rather than inventing mi
 
   const flags = result.flags || [];
   const outlook = isOpen ? (result.outlook || null) : null;
-
-  // Log each flag individually so it shows up in the console (#5) and persists
   for (const flag of flags) {
     logDecision({
       type: 'audit_flag',
@@ -135,7 +145,6 @@ If you find no real issues, return an empty flags array rather than inventing mi
     });
   }
 
-  // Also log the overall assessment as a single info-level entry, even if no flags
   logDecision({
     type: 'audit_flag',
     botId: bot.id,

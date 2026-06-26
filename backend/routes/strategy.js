@@ -269,6 +269,17 @@ MUST be consistent with a short (take profit below entry, stop loss above entry)
 direction flip in "changes" or "verdict" without setting "side" to match -- the side field is what
 the system actually acts on, prose is not enough.
 
+Both userStrategy and saferStrategy MUST also include an "entryType" field: "market" or "limit".
+The current live price for ${parsed.asset} is ${marketState ? marketState.currentPrice : (parsed.livePrice ?? 'unavailable')}.
+Set entryType to "market" if that strategy's entryPrice is essentially the current price (entering
+immediately makes sense). Set it to "limit" if that strategy's entryPrice is a different target price
+the position should wait to reach before filling. Judge userStrategy and saferStrategy independently
+-- they may end up with different entryType values from each other and from the user's original
+entryType, e.g. the user wanted to buy now (market) but the safer version waits for a pullback to a
+lower price (limit). This field is acted on directly by the system to decide how the bot actually
+executes -- describing a "wait for a better price" idea only in prose, without setting entryType to
+"limit", will cause the bot to ignore that recommendation and fill immediately at market instead.
+
 Return ONLY valid JSON, no markdown:
 {
   "riskLevel": "low" | "medium" | "high",
@@ -277,6 +288,7 @@ Return ONLY valid JSON, no markdown:
   "shouldTradeNowReason": "1-2 sentences -- if false, explain why this pair/timing is not favorable right now, even though a strategy can still technically be created",
   "userStrategy": {
     "side": "long" | "short",
+    "entryType": "market" | "limit",
     "entryPrice": number,
     "takeProfitPrice": number,
     "stopLossPrice": number,
@@ -287,13 +299,14 @@ Return ONLY valid JSON, no markdown:
   },
   "saferStrategy": {
     "side": "long" | "short",
+    "entryType": "market" | "limit",
     "entryPrice": number,
     "takeProfitPrice": number,
     "stopLossPrice": number,
     "positionSizePercent": number,
     "leverage": number,
     "riskRewardRatio": "e.g. 1:3",
-    "changes": ["what changed and why -- referencing actual current market conditions where relevant. If side differs from the user's original direction, the FIRST change listed must explicitly say so, e.g. 'Switched from long to short because...'"],
+    "changes": ["what changed and why -- referencing actual current market conditions where relevant. If side differs from the user's original direction, the FIRST change listed must explicitly say so, e.g. 'Switched from long to short because...'. If entryType differs from the user's original entryType, mention that too, e.g. 'Switched to a limit order at $X to wait for a better entry.'"],
     "verdict": "short verdict on safer version"
   },
   "recommendation": "which version you recommend and why in 1-2 sentences"
@@ -314,6 +327,20 @@ Return ONLY valid JSON, no markdown:
       analysis.saferStrategy.side = originalSide;
     }
 
+    const livePriceRef = marketState?.currentPrice ?? parsed.livePrice ?? null;
+    const deriveEntryType = (strategyObj) => {
+      if (strategyObj?.entryType === 'market' || strategyObj?.entryType === 'limit') {
+        return strategyObj.entryType;
+      }
+      if (livePriceRef && strategyObj?.entryPrice) {
+        const diffPercent = Math.abs((strategyObj.entryPrice - livePriceRef) / livePriceRef) * 100;
+        return diffPercent < 0.3 ? 'market' : 'limit';
+      }
+      return parsed.entryType || 'market';
+    };
+    if (analysis.userStrategy) analysis.userStrategy.entryType = deriveEntryType(analysis.userStrategy);
+    if (analysis.saferStrategy) analysis.saferStrategy.entryType = deriveEntryType(analysis.saferStrategy);
+
     analysis.marketState = marketState;
     analysis.fitAssessment = fitAssessment;
     if (analysis.shouldTradeNow === undefined) {
@@ -327,7 +354,6 @@ Return ONLY valid JSON, no markdown:
   }
 });
 
-// POST /api/strategy/analyze (bot verdict for backtest modal)
 router.post('/analyze', async (req, res) => {
   const { bot, backtestResults } = req.body;
   try {
@@ -341,7 +367,7 @@ router.post('/analyze', async (req, res) => {
   }
 });
 
-// POST /api/strategy/market-analysis
+
 router.post('/market-analysis', async (req, res) => {
   const TOP_SYMBOLS = [
     'BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT',

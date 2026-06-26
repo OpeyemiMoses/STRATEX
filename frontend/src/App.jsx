@@ -36,6 +36,13 @@ function AnimatedPage({ children }) {
         el.style.transform = 'translateY(0)';
       });
     });
+    const clearTransform = (e) => {
+      if (e.target === el && e.propertyName === 'transform') {
+        el.style.transform = '';
+      }
+    };
+    el.addEventListener('transitionend', clearTransform);
+    return () => el.removeEventListener('transitionend', clearTransform);
   }, []);
 
   // Scroll reveal

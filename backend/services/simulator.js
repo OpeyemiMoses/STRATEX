@@ -76,6 +76,18 @@ const checkBots = async () => {
           bot.liquidationPrice = calculateLiquidationPrice(price, bot.side, bot.leverage || 1);
         }
 
+        bot.openedWith = {
+          filledEntry: price,
+          filledAt: bot.filledAt,
+          stopLoss: bot.stopLoss,
+          takeProfit: bot.takeProfit,
+          leverage: bot.leverage || 1,
+          side: bot.side,
+          positionSize: bot.positionSize,
+          entryType: bot.entryType,
+          strategySource: bot.strategySource || null,
+        };
+
         bot.tradelog = bot.tradelog || [];
         bot.tradelog.unshift({
           time: new Date().toLocaleString('en-US', {
