@@ -6,11 +6,22 @@ Built for the Bitget AI Base Camp Hackathon S1 (Track 1: Trading Agent).
 
 🔗 **Live app:** [stratex-agent-builder.vercel.app](https://stratex-agent-builder.vercel.app)
 🔗 **Backend API:** [stratex-production.up.railway.app](https://stratex-production.up.railway.app)
-🔗 **Demo Video:** [x post](https://x.com/i/status/2070037740989645172)
+🎥 **Demo video:** [Watch on X](https://x.com/i/status/2070037740989645172)
 
 ---
 
-## What is Stratex?
+## Screenshots
+
+| | |
+|---|---|
+| ![AI recommends the opposite direction](screenshots/ai-opposite-direction-warning.png) Risk gate flagging a strategy mismatch — the AI is recommending the opposite direction of the user's original strategy, based on current market conditions | ![Volatility-aware leverage question](screenshots/clarifying-chat-leverage.png) The clarifying chat: leverage is never assumed, and the warning text reflects the asset's real current volatility |
+| ![Strategy comparison: user vs AI safer version](screenshots/strategy-comparison.png) Side-by-side strategy comparison — your original strategy vs. the AI's safer, market-aware alternative | ![AI recommendation and what changed](screenshots/ai-recommendation-changes.png) The AI's full reasoning for every change it made, plus an explicit "wait" recommendation when conditions are unfavorable |
+| ![Real multi-regime backtest results](screenshots/backtest-results.png) A real backtest result — explicitly regime-dependent, with a robustness score and per-regime breakdown | ![Confidence rating on a live bot](screenshots/bot-detail-confidence-rating.png) The same confidence rating, attached permanently to the bot after deployment |
+| ![Dashboard with paper trading balance](screenshots/dashboard-balance.png) Dashboard view — live paper-trading balance and portfolio-wide stats | ![Trade history with audit and PnL card actions](screenshots/trade-history.png) Trade history — every closed trade archived with one-click audit and shareable PnL card actions |
+| ![AI market analysis](screenshots/market-analysis.png) Qwen-generated market intelligence summarizing current conditions across tracked assets | ![AI whale analysis](screenshots/whale-analysis.png) AI commentary on on-chain whale activity and what the absence of visible large trades likely indicates |
+| ![AI trade signal for SOLUSDT](screenshots/trade-signal.png) An AI-generated trade signal with entry zone, target, stop, and confidence level | ![Technical indicators and Fear & Greed Index](screenshots/technical-indicators-fear-greed.png) Live technical indicators (RSI, MACD, trend) alongside the current Fear & Greed Index |
+
+---
 
 Stratex turns a plain-English trading idea into a fully simulated, autonomous trading bot — without ever touching real funds.
 
@@ -52,8 +63,6 @@ Stratex's thesis is that an AI-generated trading strategy should have to **prove
 - **On-demand AI auditing** — any bot, active or closed, can be reviewed by the AI for real mistakes; wallet-wide pattern detection looks across your *entire* trading history
 - **Shareable PnL cards** — branded, downloadable snapshots of any live or closed position with real live pricing
 - **Full trade history & export tooling** — every trade is archived permanently, and two standalone scripts export a complete trading log and a reproducible backtest report
-
-
 
 ### Core strategy flow
 - **Natural-language strategy parsing** — Qwen extracts asset, entry, TP/SL, position size, and leverage from plain English
@@ -114,8 +123,6 @@ Regimes are never assumed or hardcoded — they're derived from the data itself,
 
 Because the classification is purely statistical, it works identically for any asset Bitget lists — there's no per-asset tuning or assumption baked in about when a particular coin was "trending."
 
-
-
 ---
 
 ## Tech stack
@@ -168,8 +175,6 @@ Because the classification is purely statistical, it works identically for any a
 | Variable | Required | Purpose |
 |---|---|---|
 | `VITE_API_URL` | **Yes** | Base URL the frontend uses for all backend API calls. Set to `http://localhost:5000` for local dev, or your deployed backend URL (e.g. Railway) in production. Vite bakes this in at build time — changing it requires a rebuild/redeploy, not just an env var update. |
-
-
 
 ---
 
@@ -285,8 +290,6 @@ All endpoints are relative to the backend base URL (`http://localhost:5000` loca
 | `GET /signals/fear-greed` | Crypto Fear & Greed Index |
 | `GET /coingecko/icon/:symbol` | Cached coin icon lookup |
 
-
-
 ---
 
 ## Project structure
@@ -305,7 +308,7 @@ stratex/
     │                           decisions, whale, wallet
     ├── services/             # simulator, paperWallet, tradeHistory, decisionLog,
     │                           riskMonitor, botAuditor, walletAuditor, leverage,
-    │                           marketRegime, backtestEngine , contractConfig
+    │                           marketRegime, backtestEngine
     └── data/                 # gitignored — bots.json, wallets.json,
                                 trade-history.json, decision-log.json
 ```
@@ -337,8 +340,6 @@ node scripts/export-backtest-report.js
 ```
 
 Outputs `backtest-report/backtest-report.md` and `backtest-report/backtest-report.csv` at the repo root, with a full regime-by-regime breakdown and confidence rating (robustness score, risk level, overfitting risk, market adaptability) per bot. Requires network access to Bitget's public API and may take a few seconds per bot to run.
-
-
 
 ---
 
